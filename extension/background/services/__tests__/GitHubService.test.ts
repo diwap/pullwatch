@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+/// <reference types="vitest/globals" />
 import { GitHubService } from '../GitHubService';
 import {
   GitHubOutageError,
@@ -7,6 +7,8 @@ import {
   isGitHubWebSessionAuthError,
 } from '@common/errors';
 import { DEFAULT_COMPILED_PATTERNS } from '@common/default-patterns';
+import { STORAGE_KEY_ROUTE_HINT } from '@common/constants';
+import { chromeExtensionService } from '@common/chrome-extension-service';
 import type { PullRequest } from '@common/types';
 import type { IDebugService } from '../../interfaces/IDebugService';
 import type { IAvatarService } from '../../interfaces/IAvatarService';
@@ -219,5 +221,122 @@ describe('fetchAuthoredPRs dedupes overlapping buckets', () => {
     expect(result[0].authorReviewStatus).toBe('draft');
     expect(result[0].type).toBe('draft');
     expect(fetchFromURL).toHaveBeenCalledTimes(4);
+  });
+});
+
+/**
+ * WHY [unit coverage]: Live canary monitors `/pulls/search` only. These tests
+ * lock the production escape hatch when a stuck `legacy` route hint hits a
+ * 200 empty shell on bare `/pulls` (no ParserBreakageError) and must reprobe search.
+ */
+describe('empty legacy URL → search reprobe', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    vi.mocked(chromeExtensionService.storage.local.get).mockResolvedValue({});
+    vi.mocked(chromeExtensionService.storage.local.set).mockResolvedValue(undefined);
+    vi.mocked(chromeExtensionService.storage.local.remove).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function samplePR(): PullRequest {
+    return {
+      id: 'https://github.com/acme/repo/pull/9',
+      url: 'https://github.com/acme/repo/pull/9',
+      title: 'Reprobe hit',
+      number: 9,
+      repoName: 'acme/repo',
+      author: [{ login: 'bot' }],
+      createdAt: '2026-01-01T00:00:00Z',
+      type: 'merged',
+      isNew: false,
+    };
+  }
+
+  async function serviceWithLegacyHint() {
+    vi.mocked(chromeExtensionService.storage.local.get).mockResolvedValue({
+      [STORAGE_KEY_ROUTE_HINT]: { route: 'legacy', timestamp: Date.now() },
+    });
+    const { debug, avatar, patterns } = createCollaborators();
+    const service = new GitHubService(debug, avatar, patterns);
+    await service.initialize();
+    return { service, avatar, debug };
+  }
+
+  it('reprobes /pulls/search once when legacy primary returns an empty list', async () => {
+    const { service, avatar } = await serviceWithLegacyHint();
+    const pr = samplePR();
+
+    const fetchGitHubData = vi
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .spyOn(service as any, 'fetchGitHubData')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementation((async (url: string) => {
+        if (url.includes('/pulls/search')) return [pr];
+        return [];
+      }) as any);
+
+    const result = await service.fetchMergedPRs();
+
+    expect(result).toEqual([pr]);
+    expect(fetchGitHubData).toHaveBeenCalledTimes(2);
+    expect(fetchGitHubData.mock.calls[0][0]).not.toContain('/pulls/search');
+    expect(fetchGitHubData.mock.calls[1][0]).toContain('/pulls/search');
+    expect(fetchGitHubData.mock.calls[1][1]).toContain('empty legacy → search reprobe');
+    expect(chromeExtensionService.storage.local.set).toHaveBeenCalledWith({
+      [STORAGE_KEY_ROUTE_HINT]: expect.objectContaining({ route: 'search' }),
+    });
+    expect(avatar.enrichPRsWithAvatars).toHaveBeenCalledWith([pr]);
+  });
+
+  it('clears the route hint and returns empty when search reprobe throws ParserBreakageError', async () => {
+    const { service, avatar } = await serviceWithLegacyHint();
+
+    vi
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .spyOn(service as any, 'fetchGitHubData')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementation((async (url: string) => {
+        if (url.includes('/pulls/search')) {
+          throw new ParserBreakageError('search shell unparseable');
+        }
+        return [];
+      }) as any);
+
+    const result = await service.fetchMergedPRs();
+
+    expect(result).toEqual([]);
+    expect(chromeExtensionService.storage.local.remove).toHaveBeenCalledWith(
+      STORAGE_KEY_ROUTE_HINT
+    );
+    expect(avatar.enrichPRsWithAvatars).toHaveBeenCalledWith([]);
+  });
+
+  it('does not reprobe legacy when the primary search route returns an empty list', async () => {
+    // WHY: empty on `search` is a valid empty inbox — do not invent a reverse legacy probe.
+    vi.mocked(chromeExtensionService.storage.local.get).mockResolvedValue({
+      [STORAGE_KEY_ROUTE_HINT]: { route: 'search', timestamp: Date.now() },
+    });
+    const { debug, avatar, patterns } = createCollaborators();
+    const service = new GitHubService(debug, avatar, patterns);
+    await service.initialize();
+
+    const fetchGitHubData = vi
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .spyOn(service as any, 'fetchGitHubData')
+      .mockResolvedValue([]) as any;
+
+    const result = await service.fetchMergedPRs();
+
+    expect(result).toEqual([]);
+    expect(fetchGitHubData).toHaveBeenCalledTimes(1);
+    expect(fetchGitHubData.mock.calls[0][0]).toContain('/pulls/search');
+    expect(chromeExtensionService.storage.local.set).toHaveBeenCalledWith({
+      [STORAGE_KEY_ROUTE_HINT]: expect.objectContaining({ route: 'search' }),
+    });
+    expect(avatar.enrichPRsWithAvatars).toHaveBeenCalledWith([]);
   });
 });

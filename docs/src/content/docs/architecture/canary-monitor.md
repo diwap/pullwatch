@@ -3,7 +3,7 @@ title: The Canary Monitor
 description: Tier 1/2 parser checks and Discord alerts.
 ---
 
-> **Why this exists.** Pullwatch collects zero telemetry, so without a separate watchdog a DOM change on GitHub would reach users before it reached the maintainer. The canary closes that loop by running the real parser against the real GitHub site every hour in CI. It has two tiers (public and authenticated), two chapters inside the authenticated tier (legacy `/pulls?q=...` and new `/pulls/search?q=...`), and a Discord webhook that sorts every failure into one of four buckets: critical JSON drift, degraded HTML fallback, generic DOM change, or GitHub outage. When an alert fires, the runbook path is short: grab a fresh HTML sample, fix the regex, push it to the `pr-live-config` staging branch, promote to `main`, and live users recover on the next 6 hour refresh.
+> **Why this exists.** Pullwatch collects zero telemetry, so without a separate watchdog a DOM change on GitHub would reach users before it reached the maintainer. The canary closes that loop by running the real parser against the real GitHub site every hour in CI. It has two tiers (public repo lists and authenticated `/pulls/search`), and a Discord webhook that sorts every failure into one of four buckets: critical JSON drift, degraded HTML fallback, generic DOM change, or GitHub outage. When an alert fires, the runbook path is short: grab a fresh HTML sample, fix the regex, push it to the `pr-live-config` staging branch, promote to `main`, and live users recover on the next 6 hour refresh.
 
 ---
 
@@ -22,7 +22,7 @@ The flowchart below is the whole canary, from the hourly cron to live users reco
 ```mermaid
 flowchart TD
     Cron[Hourly cron at :17] --> Tier1[Tier 1: public repos<br/>no credentials]
-    Cron --> Tier2[Tier 2: Playwright<br/>two bot accounts]
+    Cron --> Tier2[Tier 2: Playwright<br/>one auth bot /pulls/search]
     Tier1 --> Orchestrator
     Tier2 --> Orchestrator[parse-orchestrator<br/>assertPRValid]
     Orchestrator -->|pass| OK[No alert]
@@ -47,33 +47,32 @@ The diagram is the whole system. Everything else on this page zooms into one of 
 
 ## Tier 1: public, no credentials
 
-The first tier is the cheap and always available probe. It targets public repositories (e.g., `facebook/react/pulls`) with a `curl`-like fetch using `BROWSER_HEADERS` from [canary/utils/config.ts](https://github.com/dragosdev-code/pullwatch/blob/main/canary/utils/config.ts), then runs the same shared waterfall the extension uses.
+The first tier is the cheap and always available probe. It targets public repositories (e.g., `facebook/react/pulls`) with a `curl`-like fetch using `BROWSER_HEADERS` from [canary/utils/config.ts](https://github.com/dragosdev-code/pullwatch/blob/main/canary/utils/config.ts), then runs `GitHubHTMLParser` (classic repo list markup).
 
-Why public first? Because it catches the biggest class of breakage (legacy selectors changing) with no secrets, no Playwright, and no bot accounts. If this tier fails, the DOM change affects every visitor to GitHub, not just signed in users. It is the simplest possible signal that something upstream moved.
+Why public first? Because it catches the biggest class of breakage (legacy selectors changing on `/owner/repo/pulls`) with no secrets, no Playwright, and no bot accounts. If this tier fails, the DOM change affects every visitor to those public lists, not just signed in users. It is the simplest possible signal that something upstream moved.
 
 Tier 1 only exercises the legacy parser. The new dashboard at `/pulls/search` tends to return a logged out HTML shell or no embedded JSON to anonymous requests; exercising it meaningfully requires a session, which is what Tier 2 is for.
 
 ---
 
-## Tier 2: Playwright with two bot accounts
+## Tier 2: Playwright on `/pulls/search`
 
-Two accounts, not one. GitHub rolls the new dashboard out per user, and the same URL serves different experiences depending on whose cookies you bring. To test both experiences in the same CI run, Tier 2 uses two dedicated bot accounts:
+The global PR dashboard at `github.com/pulls` is generally available. Authenticated monitoring therefore hits **`/pulls/search?q=...`** — the same route production prefers when the route hint is `search` (the default). Bare `/pulls` is not a hard canary contract: the GA inbox shell is not classic scrapable list HTML.
 
 | Env var                     | Role                                                                                      |
 | --------------------------- | ----------------------------------------------------------------------------------------- |
-| `GH_CANARY_USERNAME_LEGACY` | Bot pinned to the classic `/pulls?q=...` experience.                                      |
-| `GH_CANARY_USERNAME_NEW`    | Bot that sees the new `/pulls/search?q=...` dashboard.                                    |
-| `GH_CANARY_PASSWORD`        | Shared password for both accounts.                                                        |
+| `GH_CANARY_USERNAME_NEW`    | Preferred bot for authenticated `/pulls/search`.                                          |
+| `GH_CANARY_USERNAME_LEGACY` | Compat alias if NEW is unset (same Tier 2 path).                                          |
+| `GH_CANARY_PASSWORD`        | Shared password.                                                                          |
 | `GMAIL_*`                   | OAuth credentials for polling Gmail for device verification OTPs during Playwright login. |
 
-Playwright logs each bot in once per CI job, caches the resulting `storageState` file, and reuses it across runs until the cache is evicted or `force_fresh_login` is ticked on `workflow_dispatch`. The two states (`playwright-state-legacy.json`, `playwright-state-new.json`) live side by side so neither bot's session can clobber the other's.
+Playwright logs the bot in once per CI job, caches `playwright-state.json`, and reuses it across runs until the cache is evicted or `force_fresh_login` is ticked on `workflow_dispatch`.
 
-Inside the Playwright run, Tier 2 has two chapters:
+Tier 2 runs the full shared `parsePullsListHTML` gauntlet from [extension/common/pulls-list-parser.ts](https://github.com/dragosdev-code/pullwatch/blob/main/extension/common/pulls-list-parser.ts), plus a **dual probe**: it extracts PRs via both the embedded JSON harvester and the new experience HTML parser, and asserts the two agree field by field (title, repo, type, author, number, `createdAt`) for matched URLs.
 
-- **Chapter 1** hits `/pulls?q=...` on the legacy bot and runs `GitHubHTMLParser` directly. The same code path the extension takes when its route hint says `legacy`.
-- **Chapter 2** hits `/pulls/search?q=...` on the new bot and runs the full shared `parsePullsListHTML` gauntlet from [extension/common/pulls-list-parser.ts](https://github.com/dragosdev-code/pullwatch/blob/main/extension/common/pulls-list-parser.ts), plus a **dual probe**: it extracts PRs via both the embedded JSON harvester and the new experience HTML parser, and asserts the two agree field by field (title, repo, type, author, number, `createdAt`) for matched URLs.
+The dual probe is the early warning system. Even when the JSON harvester still works and tests pass, a silent divergence between JSON and HTML output means the `newExperience` pattern block is drifting. Tier 2 catches that drift through a `CANARY_NEW_HTML_FALLBACK_DEGRADED` log marker before GitHub ever drops the JSON path and forces the extension to depend on HTML alone.
 
-The dual probe is the early warning system. Even when the JSON harvester still works and tests pass, a silent divergence between JSON and HTML output means the `newExperience` pattern block is drifting. Chapter 2 catches that drift through a `CANARY_NEW_HTML_FALLBACK_DEGRADED` log marker before GitHub ever drops the JSON path and forces the extension to depend on HTML alone.
+Production still keeps an empty-legacy → search reprobe in `GitHubService` for stuck route hints; that path is covered by unit tests rather than a live classic-`/pulls` canary chapter.
 
 ---
 
@@ -81,7 +80,7 @@ The dual probe is the early warning system. Even when the JSON harvester still w
 
 A mocked HTML fixture drifts from reality the moment GitHub ships a DOM change. The canary's whole reason to exist is to detect those drifts, so mocking the input would make the test self confirm and useless.
 
-Real accounts cost two bots and some Playwright infrastructure; that is a small price for a test that fails for the right reason. A failed canary is literally GitHub's current HTML, parsed by the extension's current parser; the signal is unambiguous.
+Real accounts cost one bot and some Playwright infrastructure; that is a small price for a test that fails for the right reason. A failed canary is literally GitHub's current HTML, parsed by the extension's current parser; the signal is unambiguous.
 
 ---
 
@@ -111,7 +110,7 @@ The classification happens **once** per run and produces a single Discord messag
 
 ## HTML snapshots and traces on failure
 
-When a parser throws, [canary/utils/failure-snapshot.ts](https://github.com/dragosdev-code/pullwatch/blob/main/canary/utils/failure-snapshot.ts) writes HTML to `canary/snapshots/`. Tier 2 navigation or activation failures also write snapshots plus Playwright **trace** zips under `canary/traces/` (screenshots inside the trace). Failed workflow runs upload `canary/snapshots/`, `canary/traces/`, `canary.log`, and the `playwright-state-*.json` files as the `canary-failure-<run_id>` artifact for `npx playwright show-trace`. Paths are gitignored locally.
+When a parser throws, [canary/utils/failure-snapshot.ts](https://github.com/dragosdev-code/pullwatch/blob/main/canary/utils/failure-snapshot.ts) writes HTML to `canary/snapshots/`. Tier 2 navigation or activation failures also write snapshots plus Playwright **trace** zips under `canary/traces/` (screenshots inside the trace). Failed workflow runs upload `canary/snapshots/`, `canary/traces/`, `canary.log`, and `playwright-state.json` as the `canary-failure-<run_id>` artifact for `npx playwright show-trace`. Paths are gitignored locally.
 
 Why dump HTML rather than parsed output? Because the whole point of the failure is that the parser could not produce parsed output. A maintainer triaging the alert needs to see what GitHub actually served, not what the parser guessed it might have been. Full HTML snapshots and Playwright traces (timeline + screenshots) make renamed classes, missing `data-testid`s, login walls, and multi-account 404 shells obvious.
 
@@ -136,7 +135,7 @@ The loop closes on its own. Within 6 hours, every live install refreshes its pat
 
 ### Only one tier fails
 
-Tier 1 failing alone usually means a legacy page change (the public `/pulls` route). Tier 2 Chapter 2 failing alone usually means a new dashboard change; the legacy experience is unaffected. Each tier's failure label in the log says which, and the fix is scoped accordingly: Tier 1 points at legacy pattern keys, Chapter 2 at `patterns.newExperience` and the JSON harvester.
+Tier 1 failing alone usually means a legacy page change on public `/owner/repo/pulls`. Tier 2 failing alone usually means a new dashboard / SSR change on `/pulls/search`. Each tier's failure label in the log says which, and the fix is scoped accordingly: Tier 1 points at legacy pattern keys, Tier 2 at `patterns.newExperience` and the JSON harvester.
 
 ### The canary passes but `CANARY_NEW_HTML_FALLBACK_DEGRADED` fires
 
@@ -152,7 +151,7 @@ GitHub sometimes demands an OTP code sent to the bot's email. The canary's Gmail
 
 ### A cached Playwright session hits "Page not found" on global `/pulls`
 
-[getPageHTML in canary/utils/github-session.ts](https://github.com/dragosdev-code/pullwatch/blob/main/canary/utils/github-session.ts) is **self-healing** for the usual multi-account routing flake: it classifies the HTML shell, and if GitHub served a global-pulls 404 while the context is still logged in, it runs **`activateAccountForRouting`** (select the real `/switch_account` row, then probe `/pulls`) with short backoff, then **rewrites `storageState`** when recovery succeeds so the **next** CI run inherits good cookies, with no manual deletion of `playwright-state-*.json` required for that case. Fresh logins already activate before the first save. Bounded attempts avoid spinning forever; a genuinely bad session surfaces as login or `Account activation failed` (see [DOM_CHANGE_RUNBOOK.md § 404 after fresh login](https://github.com/dragosdev-code/pullwatch/blob/main/canary/DOM_CHANGE_RUNBOOK.md#404-after-fresh-login-multi-account-routing)).
+[getPageHTML in canary/utils/github-session.ts](https://github.com/dragosdev-code/pullwatch/blob/main/canary/utils/github-session.ts) is **self-healing** for the usual multi-account routing flake: it classifies the HTML shell, and if GitHub served a global-pulls 404 while the context is still logged in, it runs **`activateAccountForRouting`** (select the real `/switch_account` row, then probe `/pulls`) with short backoff, then **rewrites `storageState`** when recovery succeeds so the **next** CI run inherits good cookies, with no manual deletion of `playwright-state.json` required for that case. Fresh logins already activate before the first save. Bounded attempts avoid spinning forever; a genuinely bad session surfaces as login or `Account activation failed` (see [DOM_CHANGE_RUNBOOK.md § 404 after fresh login](https://github.com/dragosdev-code/pullwatch/blob/main/canary/DOM_CHANGE_RUNBOOK.md#404-after-fresh-login-multi-account-routing)).
 
 ### Same upstream, opposite default
 

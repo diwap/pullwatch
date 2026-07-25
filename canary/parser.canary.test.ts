@@ -6,31 +6,32 @@
  *
  * **Runbook:** [canary/DOM_CHANGE_RUNBOOK.md](DOM_CHANGE_RUNBOOK.md)
  *
- * - **Tier 1** — [Step 2+](DOM_CHANGE_RUNBOOK.md#step-2--identify-which-pattern-broke) (public baseline, legacy parser).
- * - **Chapter 1** — legacy `/pulls?q=…` — same remediation as Tier 1 for classic patterns.
- * - **Chapter 2** — `/pulls/search` — [embedded JSON / HTML fallback](DOM_CHANGE_RUNBOOK.md#step-2--identify-which-pattern-broke),
+ * - **Tier 1** — public `/owner/repo/pulls` baseline via legacy `GitHubHTMLParser`
+ *   ([Step 2+](DOM_CHANGE_RUNBOOK.md#step-2--identify-which-pattern-broke)).
+ * - **Tier 2** — authenticated `/pulls/search` — [embedded JSON / HTML fallback](DOM_CHANGE_RUNBOOK.md#step-2--identify-which-pattern-broke),
  *   markers `CANARY_EMBEDDED_JSON_DRIFT` / `CANARY_NEW_HTML_FALLBACK_DEGRADED`.
  *
+ * WHY [Tier 2 = search only]: The global PR dashboard at github.com/pulls is GA;
+ * production defaults the route hint to `search`. Authenticated monitoring hits
+ * `/pulls/search` (SSR JSON + new HTML), not bare `/pulls` classic rows.
+ *
  * Environment variables (Tier 2):
- *   GH_CANARY_USERNAME_LEGACY, GH_CANARY_USERNAME_NEW — separate bots
- *   GH_CANARY_PASSWORD — shared password for both
+ *   GH_CANARY_USERNAME_NEW — preferred bot username
+ *   GH_CANARY_USERNAME_LEGACY — compat alias if NEW is unset
+ *   GH_CANARY_PASSWORD — shared password
  *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN — device OTP bypass
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+/// <reference types="vitest/globals" />
 import { chromium, type Browser } from 'playwright';
 import {
   PUBLIC_TARGETS,
   AUTH_TARGETS,
-  AUTH_TARGETS_SEARCH,
-  HAS_ANY_AUTH_CREDENTIALS,
-  HAS_LEGACY_CREDENTIALS,
-  HAS_NEW_CREDENTIALS,
-  CANARY_LEGACY_USERNAME,
-  CANARY_NEW_USERNAME,
+  HAS_AUTH_CREDENTIALS,
+  CANARY_USERNAME,
+  CANARY_USERNAME_ENV_HINT,
   CANARY_PASSWORD,
-  STATE_FILE_LEGACY,
-  STATE_FILE_NEW,
+  STATE_FILE,
   BROWSER_HEADERS,
 } from './utils/config';
 import { GitHubOutageError, RateLimitError } from '@common/errors';
@@ -42,8 +43,7 @@ import { GitHubSession } from './utils/github-session';
 // 5xx and Cloudflare edge errors (520-530) that GitHub's CDN can return.
 // These are infrastructure issues, not content/DOM problems.
 const TRANSIENT_STATUS_CODES = new Set([
-  429, 500, 502, 503, 504,
-  520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530,
+  429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530,
 ]);
 
 function isTransientStatus(status: number): boolean {
@@ -64,14 +64,14 @@ async function fetchWithRetry(
   url: string,
   headers: Record<string, string>,
   retries = 2,
-  delayMs = 5_000,
+  delayMs = 5_000
 ): Promise<Response> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const resp = await fetch(url, { headers, redirect: 'follow' });
     if (resp.ok) return resp;
     if (isTransientStatus(resp.status) && attempt < retries) {
       console.warn(
-        `  [fetch] HTTP ${resp.status} — retrying in ${delayMs}ms (attempt ${attempt + 1}/${retries})`,
+        `  [fetch] HTTP ${resp.status} — retrying in ${delayMs}ms (attempt ${attempt + 1}/${retries})`
       );
       await sleep(delayMs);
       continue;
@@ -115,117 +115,53 @@ describe('Canary: GitHub PR parser against live DOM', () => {
   });
 
   // ═════════════════════════════════════════════════════════════════════════
-  // Tier 2: Authenticated journeys — shared browser, one context per chapter
+  // Tier 2: Authenticated /pulls/search (production default route)
   // ═════════════════════════════════════════════════════════════════════════
 
-  describe.skipIf(!HAS_ANY_AUTH_CREDENTIALS)('Tier 2 — Authenticated PR journeys', () => {
+  describe.skipIf(!HAS_AUTH_CREDENTIALS)('Tier 2 — Authenticated /pulls/search', () => {
     let browser: Browser;
+    let session!: GitHubSession;
 
     beforeAll(async () => {
-      console.log('\n── Tier 2: Launching shared Chromium for legacy + new chapters ──');
+      // WHY [shared Chromium]: one browser process; GitHubSession still opens an
+      // isolated context so cookies stay on the single auth bot.
+      console.log('\n── Tier 2: Launching Chromium for /pulls/search ──');
       browser = await chromium.launch({ headless: true });
+      session = new GitHubSession({
+        username: CANARY_USERNAME,
+        password: CANARY_PASSWORD,
+        stateFile: STATE_FILE,
+        browser,
+        usernameEnvHint: CANARY_USERNAME_ENV_HINT,
+      });
+      await session.launch();
     });
 
     afterAll(async () => {
+      await session?.close();
       await browser?.close();
-      console.log('── Tier 2: Shared browser closed ──\n');
+      console.log('── Tier 2: Browser closed ──\n');
     });
 
-    /**
-     * Run chapters in order: legacy account must finish (and release its context)
-     * before the new-experience account logs in — avoids cookie bleed and matches
-     * the Playwright multi-context pattern.
-     */
-    describe.sequential('Chapters (legacy then new experience)', () => {
-      // ── Chapter 1: The Legacy Path ─────────────────────────────────────
-      // Why: production’s legacy route uses GitHubHTMLParser only; background fetch
-      // does not run JS, so /pulls?q= must still yield classic scrapable HTML.
+    describe.each(AUTH_TARGETS)('$label', (target) => {
+      it('embedded SSR JSON path, HTML fallback observability, and search-route parse — see Runbook Step 2 / markers', async () => {
+        console.log(`\n── Tier 2: ${target.label} ──`);
 
-      describe.skipIf(!HAS_LEGACY_CREDENTIALS)('Chapter 1 — Legacy /pulls path', () => {
-        let session!: GitHubSession;
-
-        beforeAll(async () => {
-          session = new GitHubSession({
-            username: CANARY_LEGACY_USERNAME,
-            password: CANARY_PASSWORD,
-            stateFile: STATE_FILE_LEGACY,
-            browser,
-            usernameEnvHint: 'GH_CANARY_USERNAME_LEGACY',
-          });
-          await session.launch();
-        });
-
-        describe.each(AUTH_TARGETS)('$label', (target) => {
-          it('parses the authenticated page and validates PR contract (incl. soft avatar check)', async () => {
-            console.log(`\n── Chapter 1: ${target.label} ──`);
-
-            if (!session.isLoggedIn) {
-              console.warn(
-                `  ⊘ Skipping "${target.label}" — login did not succeed (see beforeAll logs above)`,
-              );
-              return;
-            }
-
-            const html = await session.getPageHTML(target.url);
-            const prs = await parseAndAssert(html, target);
-            checkAvatarCoverage(prs, target.label, 2);
-
-            console.log(`── Chapter 1: ${target.label} — PASSED ──\n`);
-          });
-        });
-
-        afterAll(async () => {
-          await session.close();
-        });
-      });
-
-      // ── Chapter 2: The New Experience ───────────────────────────────────
-      // Why: new dashboard prefers /pulls/search + embedded SSR JSON; JSON is tried
-      // first in the waterfall because it is more stable than hashed CSS modules.
-      // Observability splits CRITICAL JSON drift vs WARN-only HTML fallback drift.
-
-      describe.skipIf(!HAS_NEW_CREDENTIALS)('Chapter 2 — New /pulls/search experience', () => {
-        let session!: GitHubSession;
-
-        beforeAll(async () => {
-          session = new GitHubSession({
-            username: CANARY_NEW_USERNAME,
-            password: CANARY_PASSWORD,
-            stateFile: STATE_FILE_NEW,
-            browser,
-            usernameEnvHint: 'GH_CANARY_USERNAME_NEW',
-          });
-          await session.launch();
-        });
-
-        describe.each(AUTH_TARGETS_SEARCH)('$label', (target) => {
-          it(
-            'embedded SSR JSON path, HTML fallback observability, and search-route parse — see Runbook Step 2 / markers',
-            async () => {
-              console.log(`\n── Chapter 2: ${target.label} ──`);
-
-              if (!session.isLoggedIn) {
-                console.warn(
-                  `  ⊘ Skipping "${target.label}" — login did not succeed (see beforeAll logs above)`,
-                );
-                return;
-              }
-
-              const html = await session.getPageHTML(target.url);
-              // Observability first: emits CANARY_* markers and throws on critical JSON drift
-              // before we assert parse success — keeps Discord/workflow logic aligned with logs.
-              observeNewExperienceSearchObservability(html, target.label);
-              const prs = await parseSearchRouteAndAssert(html, target);
-              checkAvatarCoverage(prs, target.label, 2);
-
-              console.log(`── Chapter 2: ${target.label} — PASSED ──\n`);
-            },
+        if (!session.isLoggedIn) {
+          console.warn(
+            `  ⊘ Skipping "${target.label}" — login did not succeed (see beforeAll logs above)`
           );
-        });
+          return;
+        }
 
-        afterAll(async () => {
-          await session.close();
-        });
+        const html = await session.getPageHTML(target.url);
+        // Observability first: emits CANARY_* markers and throws on critical JSON drift
+        // before we assert parse success — keeps Discord/workflow logic aligned with logs.
+        observeNewExperienceSearchObservability(html, target.label);
+        const prs = await parseSearchRouteAndAssert(html, target);
+        checkAvatarCoverage(prs, target.label, 2);
+
+        console.log(`── Tier 2: ${target.label} — PASSED ──\n`);
       });
     });
   });

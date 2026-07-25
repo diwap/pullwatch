@@ -6,8 +6,8 @@ When the canary test fails because GitHub changed their DOM, follow this runbook
 
 | Runbook topic | Canary module |
 |---------------|----------------|
-| Tier 1 / Chapter 1 legacy parse, structural `assertPRValid` | [`canary/utils/parse-orchestrator.ts`](utils/parse-orchestrator.ts) (`parseAndAssert`), [`canary/utils/assertions.ts`](utils/assertions.ts) |
-| Chapter 2 JSON vs HTML dual-probe, `CANARY_*` markers | [`canary/utils/dual-probe.ts`](utils/dual-probe.ts), [`canary/utils/markers.ts`](utils/markers.ts) |
+| Tier 1 public legacy parse, structural `assertPRValid` | [`canary/utils/parse-orchestrator.ts`](utils/parse-orchestrator.ts) (`parseAndAssert`), [`canary/utils/assertions.ts`](utils/assertions.ts) |
+| Tier 2 JSON vs HTML dual-probe, `CANARY_*` markers | [`canary/utils/dual-probe.ts`](utils/dual-probe.ts), [`canary/utils/markers.ts`](utils/markers.ts) |
 | Shared production waterfall (JSON → new HTML → legacy) | [`extension/common/pulls-list-parser.ts`](../extension/common/pulls-list-parser.ts) — `parseSearchRouteAndAssert` delegates here |
 | GitHub Status API outage disambiguation | [`canary/utils/github-status.ts`](utils/github-status.ts) |
 | Targets, headers, env diagnostics | [`canary/utils/config.ts`](utils/config.ts) — `loadCanaryEnv()` / `canaryEnv` discriminated union, `GITHUB_BASE_URL`, shared [`extension/common/github-url-utils.ts`](../extension/common/github-url-utils.ts) (`toPullsSearchUrl`) |
@@ -65,7 +65,7 @@ The extension parses GitHub HTML pages using regex patterns to extract PR data. 
 - **Legacy global pulls** (`/pulls?q=…`) — `GitHubHTMLParser` + the legacy pattern set (`prRowSelectors`, `prLink`, etc.).
 - **New global pulls** (`/pulls/search?q=…`) — same `parsePullsListHTML` gauntlet as legacy URL attempts: `GitHubEmbeddedJsonPullHarvest` first, then `NewExperienceGitHubHTMLParser`, then `GitHubHTMLParser`. The **new experience** uses the optional `patterns.newExperience` block in `patterns.json` (separate from legacy keys).
 
-**Canary layout** — `canary/parser.canary.test.ts` runs **Tier 1** (public repo lists, legacy parser only) and **Tier 2** (authenticated Playwright): **Chapter 1** hits legacy `/pulls?q=…` with `GitHubHTMLParser`; **Chapter 2** hits `/pulls/search?q=…`, asserts embedded JSON, runs `NewExperienceGitHubHTMLParser` as a dual-probe, and **requires matching fields** (title, repo, type, author, number, createdAt) per PR when JSON and HTML row counts agree. Tier 2 uses **two bot accounts** (`GH_CANARY_USERNAME_LEGACY` / `GH_CANARY_USERNAME_NEW`) plus shared `GH_CANARY_PASSWORD`, isolated `storageState` files, and **one shared Chromium** process.
+**Canary layout** — `canary/parser.canary.test.ts` runs **Tier 1** (public repo lists, legacy parser only) and **Tier 2** (authenticated Playwright on `/pulls/search?q=…`): asserts embedded JSON, runs `NewExperienceGitHubHTMLParser` as a dual-probe, and **requires matching fields** (title, repo, type, author, number, createdAt) per PR when JSON and HTML row counts agree. Tier 2 uses **one bot** (`GH_CANARY_USERNAME_NEW`, with `GH_CANARY_USERNAME_LEGACY` as a compat alias), shared `GH_CANARY_PASSWORD`, a single `playwright-state.json`, and one Chromium process. Bare global `/pulls` is not a hard canary chapter — the GA dashboard shell is not classic scrapable list HTML.
 
 **To fix it**, you update the regex in **both** the remote `patterns.json` (immediate hot-fix for live users) and the bundled `default-patterns.ts` (for future builds and canary CI). If the break is **only** the SSR JSON envelope, you may need to change **`GitHubEmbeddedJsonPullHarvest.ts`** (traversal / mapping), not patterns.
 
@@ -83,23 +83,23 @@ The extension parses GitHub HTML pages using regex patterns to extract PR data. 
 | `extension/background/services/GitHubEmbeddedJsonPullHarvest.ts` | Extracts PR rows from the new pulls dashboard SSR JSON blob (primary path for `/pulls/search`) |
 | `extension/background/services/GitHubService.ts` | Production router: shared `parsePullsListHTML` (JSON → new-experience HTML → legacy) |
 | `extension/common/pulls-list-parser.ts` | Shared waterfall used by `GitHubService` and canary `parseSearchRouteAndAssert` |
-| `extension/common/github-url-utils.ts` | `toPullsSearchUrl` — production and canary Chapter 2 URLs |
+| `extension/common/github-url-utils.ts` | `toPullsSearchUrl` — production and canary Tier 2 URLs |
 | `extension/background/services/PatternRegistryService.ts` | Fetches remote `patterns.json`, caches in `chrome.storage.local`, 6-hour TTL |
 | `extension/common/constants.ts` | `REMOTE_PATTERNS_URL`, `REMOTE_PATTERNS_STAGING_URL`, `PATTERN_REFRESH_TTL_MS` (6h) — single source of truth for smoke-test fetch targets |
 | `vitest.remote-patterns.config.ts` | Vitest config for the remote schema smoke: sets `REMOTE_PATTERNS_URL` from constants via `--mode` (`staging` vs default production), or respects a pre-set `REMOTE_PATTERNS_URL` for forks |
 | `extension/common/errors.ts` | `ParserBreakageError` definition |
-| `canary/parser.canary.test.ts` | Canary suite: Tier 1 public; Tier 2 shared browser, Chapter 1 legacy pulls, Chapter 2 `/pulls/search` |
+| `canary/parser.canary.test.ts` | Canary suite: Tier 1 public repo lists; Tier 2 authenticated `/pulls/search` |
 | `canary/utils/assertions.ts` | `assertPRValid`, `checkAvatarCoverage` — structural PR contract only |
 | `canary/utils/parse-orchestrator.ts` | `parseAndAssert`, `parseSearchRouteAndAssert` (delegates to shared `parsePullsListHTML`) |
 | `canary/utils/dual-probe.ts` | `observeNewExperienceSearchObservability`, JSON-vs-HTML field alignment |
 | `canary/utils/markers.ts` | `CANARY_EMBEDDED_JSON_DRIFT` / `CANARY_NEW_HTML_FALLBACK_DEGRADED` (CI grep targets) |
-| `canary/utils/config.ts` | Targets (`PUBLIC_TARGETS`, `AUTH_TARGETS`, `AUTH_TARGETS_SEARCH`), `BROWSER_HEADERS`, `loadCanaryEnv()` / `canaryEnv`, `GITHUB_BASE_URL`, `toPullsSearchUrl` via extension common |
-| `canary/utils/text-normalization.ts` | `normalizePullUrl`, `normalizeTitleForCompare`, etc. — JSON vs HTML row alignment in Chapter 2 |
+| `canary/utils/config.ts` | Targets (`PUBLIC_TARGETS`, `AUTH_TARGETS`), `BROWSER_HEADERS`, `loadCanaryEnv()` / `canaryEnv`, `GITHUB_BASE_URL`, `toPullsSearchUrl` via extension common |
+| `canary/utils/text-normalization.ts` | `normalizePullUrl`, `normalizeTitleForCompare`, etc. — JSON vs HTML row alignment in Tier 2 |
 | `canary/utils/github-status.ts` | `isGitHubDegraded` — outage vs DOM ambiguity in `parse-orchestrator` |
 | `canary/utils/failure-snapshot.ts` | Writes `canary/snapshots/*.html` on parse throw; `canary/traces/*.zip` via `stopAndSaveTrace` on Tier 2 navigate/activation failures |
 | `canary/utils/gmail-fetcher.ts` | Gmail OTP polling for Playwright device verification |
 | `canary/utils/github-session.ts` | Playwright login, `activateAccountForRouting` (`/login/account_switch` + `/pulls` probe before `storageState` save), classify-before-settle navigation, tracing, bounded 404 recovery |
-| `.github/workflows/canary-parser-test.yml` | Hourly cron; secrets for legacy/new usernames + password + Gmail; `tee canary.log`; grep markers → CRITICAL JSON drift / activation / NOTICE HTML degraded Discord; `upload-artifact` on failure |
+| `.github/workflows/canary-parser-test.yml` | Hourly cron; secrets for auth username (NEW preferred, LEGACY alias) + password + Gmail; `tee canary.log`; grep markers → CRITICAL JSON drift / activation / NOTICE HTML degraded Discord; `upload-artifact` on failure |
 
 ### Remote Config (`patterns.json`)
 
@@ -152,8 +152,8 @@ Open the failed GitHub Actions run. The CI logs tell you exactly what broke.
 
 **Which chapter failed?**
 
-- **Chapter 1** (`/pulls?q=…`, labels like `Auth: Assigned PRs…`) — legacy `GitHubHTMLParser` + legacy pattern keys (`prRowSelectors`, `prLink`, …).
-- **Chapter 2** (`/pulls/search?q=…`, labels like `Auth (search): …`) — embedded JSON + `NewExperienceGitHubHTMLParser` dual-probe in `canary/utils/dual-probe.ts` (`observeNewExperienceSearchObservability`, `assertNewExperienceJsonHtmlFieldAlignment`); shared waterfall in `parseSearchRouteAndAssert` → `extension/common/pulls-list-parser.ts`.
+- **Tier 1** (public `/owner/repo/pulls`) — legacy `GitHubHTMLParser` + legacy pattern keys (`prRowSelectors`, `prLink`, …).
+- **Tier 2** (`/pulls/search?q=…`, labels like `Auth (search): …`) — embedded JSON + `NewExperienceGitHubHTMLParser` dual-probe in `canary/utils/dual-probe.ts` (`observeNewExperienceSearchObservability`, `assertNewExperienceJsonHtmlFieldAlignment`); shared waterfall in `parseSearchRouteAndAssert` → `extension/common/pulls-list-parser.ts`.
 
 ### Error: `ParserBreakageError` thrown
 
@@ -226,7 +226,7 @@ Navigate to the URL → press `F12` → Elements tab. Inspect the PR list markup
 
 **Save the HTML to a file** — you will need it for local testing in the next steps.
 
-For **Chapter 2** (new search route), public `curl` without cookies often returns a login wall — capture HTML while logged in (Playwright “Save as”, DevTools copy outer HTML on `/pulls/search?…`, or run the canary / a small Playwright script with your test account).
+For **Tier 2** (`/pulls/search`), public `curl` without cookies often returns a login wall — capture HTML while logged in (Playwright “Save as”, DevTools copy outer HTML on `/pulls/search?…`, or run the canary / a small Playwright script with your test account).
 
 ---
 
@@ -242,7 +242,7 @@ This runs `vitest run --config vitest.canary.config.ts` which targets `canary/**
 
 The canary uses `DEFAULT_COMPILED_PATTERNS` from `extension/common/default-patterns.ts` — the exact same bundled patterns as CI.
 
-**Tier 2 locally** requires the same env vars as CI if you want Chapter 1 / 2 to run: `GH_CANARY_USERNAME_LEGACY`, `GH_CANARY_USERNAME_NEW`, `GH_CANARY_PASSWORD`, and (for device verification) Gmail OAuth secrets — see `canary/parser.canary.test.ts` and `canary/utils/config.ts`. Without them, Tier 2 is skipped and only Tier 1 runs.
+**Tier 2 locally** requires the same env vars as CI if you want authenticated `/pulls/search` to run: `GH_CANARY_USERNAME_NEW` (or `GH_CANARY_USERNAME_LEGACY` as alias), `GH_CANARY_PASSWORD`, and (for device verification) Gmail OAuth secrets — see `canary/parser.canary.test.ts` and `canary/utils/config.ts`. Without them, Tier 2 is skipped and only Tier 1 runs.
 
 ---
 
@@ -571,7 +571,7 @@ Or via GitHub Actions: run the **"Remote Patterns Schema Smoke"** workflow **wit
 |------|-------------------|--------------------------|
 | Schema smoke — production (`npm run test:remote-patterns`) | Hosted JSON from `main` passes Valibot + every `regex` compiles (Acts 1–3). No `DEFAULT_PATTERNS` parity — production may hotfix ahead of a store release | Whether regexes actually *match* live GitHub HTML |
 | Schema smoke — staging (`npm run test:remote-patterns:staging`) | Acts 1–3 **plus** Act 4: hosted `patterns` must equal bundled `DEFAULT_PATTERNS` after a JSON round-trip | Whether regexes actually *match* live GitHub HTML |
-| Canary (`npm run canary:test`) | Tier 1: legacy parser on public repo lists. Tier 2: Playwright → Chapter 1 legacy `/pulls`, Chapter 2 `/pulls/search` with embedded JSON + `newExperience` HTML dual-probe and per-field JSON/HTML alignment when counts match | Remote `patterns.json` schema parity with production smoke (canary uses **bundled** `DEFAULT_COMPILED_PATTERNS` only) |
+| Canary (`npm run canary:test`) | Tier 1: legacy parser on public repo lists. Tier 2: Playwright → authenticated `/pulls/search` with embedded JSON + `newExperience` HTML dual-probe and per-field JSON/HTML alignment when counts match | Remote `patterns.json` schema parity with production smoke (canary uses **bundled** `DEFAULT_COMPILED_PATTERNS` only) |
 
 Run **both** smoke variants when promoting config: staging script before merge to `main`, production script after. Run the **canary** after a `patterns.json` change: the smoke catches typos and schema drift; the canary catches DOM-mismatch regressions.
 
@@ -656,13 +656,13 @@ PatternRegistry
 
 If you are an AI coding agent tasked with fixing a canary failure:
 
-1. **Read the CI logs first** to identify the specific assertion, marker, or error. The log may contain an HTML snippet and lines like `Chapter 1:` vs `Chapter 2:`.
-2. **Fetch a fresh HTML sample** using the curl command from Step 3, Option A for **Tier 1 / legacy** pages. For **`/pulls/search`**, prefer an authenticated capture (Step 3 note) because anonymous responses may omit the embedded JSON blob.
+1. **Read the CI logs first** to identify the specific assertion, marker, or error. The log may contain an HTML snippet and lines like `Tier 1:` vs `Tier 2:`.
+2. **Fetch a fresh HTML sample** using the curl command from Step 3, Option A for **Tier 1 / public repo** pages. For **`/pulls/search`**, prefer an authenticated capture (Step 3 note) because anonymous responses may omit the embedded JSON blob.
 3. **Identify the broken component** using Step 2: legacy pattern keys vs `newExperience` vs `GitHubEmbeddedJsonPullHarvest` / `CANARY_EMBEDDED_JSON_DRIFT`.
 4. **Inspect the HTML** around PR rows, `react-app.embeddedData`, links, timestamps, and status markers.
 5. **Edit `extension/common/default-patterns.ts`** for regex fixes. For SSR JSON envelope drift, edit **`GitHubEmbeddedJsonPullHarvest.ts`** (not patterns).
 6. **Run `npm test`** immediately after editing `default-patterns.ts` (and after harvester edits if TypeScript broke types). The schema suite validates `DEFAULT_PATTERNS`; harvester changes should still pass `npm test` for the whole project.
-7. **Run `npm run canary:test`** (with Tier 2 secrets if you need Chapter 2 locally) to verify against live GitHub.
+7. **Run `npm run canary:test`** (with Tier 2 secrets if you need authenticated `/pulls/search` locally) to verify against live GitHub.
 8. **Update the remote `patterns.json`** on the `staging` branch of the `pr-live-config` repo (see Step 7). Remember to bump `version` and update `updatedAt`. Push to `staging`, not `main`.
 9. **After editing `patterns.json`**, run `npm test` from the extension repo (see Step 7.3b) for offline validation, then run `npm run test:remote-patterns:staging` (see Step 7.5). This validates the actual hosted staging file end-to-end with the same schema + regex compilation the extension uses, and asserts parity with `DEFAULT_PATTERNS`.
 10. **Promote staging to production** once the smoke test passes: `git checkout main && git merge staging && git push origin main` in the config repo (see Step 7.6).

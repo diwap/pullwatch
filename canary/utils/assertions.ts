@@ -13,8 +13,9 @@ import type { PullRequest } from '@common/types';
 /**
  * Validates that a single PR has all the fields the extension UI relies on.
  *
- * Embedded JSON rows may omit `number` while still providing a permalink URL; we infer from
- * `/pull/N` so Chapter 2 and Chapter 1 share one structural contract.
+ * WHY [infer number]: Embedded JSON rows may omit `number` while still providing
+ * a permalink URL; we infer from `/pull/N` so Tier 1 (legacy HTML) and Tier 2
+ * (SSR JSON / new HTML) share one structural contract for the popup UI.
  */
 export function assertPRValid(pr: PullRequest, label: string): void {
   expect(pr.url, `[${label}] PR url`).toMatch(/\/pull\/\d+/);

@@ -106,7 +106,7 @@ GitHub serves the same PR list at two different URL shapes:
 
 | Route    | URL template          | Which experience it tends to serve |
 | -------- | --------------------- | ---------------------------------- |
-| `search` | `/pulls/search?q=...` | New dashboard, forward rollout.    |
+| `search` | `/pulls/search?q=...` | New dashboard (GA at github.com/pulls; production default). |
 | `legacy` | `/pulls?q=...`        | Classic experience.                |
 
 If the extension had to probe both every cycle, every user would see two HTTP requests per list per alarm. That is wasteful and it doubles the chance of a rate limit. The fix is a small persisted hint in `chrome.storage.local` under `STORAGE_KEY_ROUTE_HINT`:
@@ -118,7 +118,7 @@ interface RouteHint {
 }
 ```
 
-Each successful fetch writes the hint. Each new fetch reads it, defaulting to `search` when the hint is missing (the new experience is the forward rollout). The hint has a **24 hour TTL** (`ROUTE_HINT_TTL_MS`), so if a GitHub rollout flips the user to the other experience, the stale hint expires on its own. No user can be permanently pinned to the wrong route.
+Each successful fetch writes the hint. Each new fetch reads it, defaulting to `search` when the hint is missing (the global dashboard is GA; `search` is the steady-state route). The hint has a **24 hour TTL** (`ROUTE_HINT_TTL_MS`), so if a stale hint points at the wrong URL shape, it expires on its own. No user can be permanently pinned to the wrong route.
 
 The full decision tree for a single list fetch, from [GitHubService.fetchPRs](https://github.com/dragosdev-code/pullwatch/blob/main/extension/background/services/GitHubService.ts):
 
@@ -143,7 +143,7 @@ flowchart TD
 
 </div>
 
-The "0 rows on legacy → reprobe search" branch deserves a mention. The new experience can return a 200 OK shell with zero pull requests even when the legacy URL is what you asked for, because a feature flag decides the experience based on the user, not the URL. Without the reprobe, a user caught mid rollout could see an empty inbox until the 24 hour TTL expires. The reprobe escapes that trap on the very next cycle.
+The "0 rows on legacy → reprobe search" branch deserves a mention. A stuck `legacy` route hint (or a bare `/pulls` request) can receive a 200 OK new-dashboard shell that parses as zero pull requests without throwing `ParserBreakageError`. Without the reprobe, that user could see an empty inbox until the 24 hour TTL expires. The reprobe escapes that trap on the very next cycle. Unit tests in `GitHubService` cover this path; the live canary monitors `/pulls/search` directly.
 
 ---
 

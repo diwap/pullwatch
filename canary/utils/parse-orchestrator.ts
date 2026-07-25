@@ -2,12 +2,12 @@
  * Public canary entry points that drive the extension's parsers against live
  * GitHub HTML, log diagnostics, and enforce structural correctness.
  *
- * Chapter 1 uses {@link parseAndAssert} — legacy HTML parser only, matching
- * production's legacy route behavior for users not on the new dashboard.
+ * Tier 1 uses {@link parseAndAssert} — legacy `GitHubHTMLParser` on public
+ * `/owner/repo/pulls` lists (classic repo PR markup).
  *
- * Chapter 2 uses {@link parseSearchRouteAndAssert} — JSON harvester first,
- * then new-experience HTML fallback, mirroring production's search-route
- * probe order. Observability markers for the search route are emitted by
+ * Tier 2 uses {@link parseSearchRouteAndAssert} — same gauntlet as production
+ * `parsePullsListHTML` (JSON → new HTML → legacy) on authenticated
+ * `/pulls/search`. Observability markers are emitted by
  * {@link observeNewExperienceSearchObservability} in `dual-probe.ts`, which
  * the test file invokes *before* this function to keep marker emission
  * decoupled from pass/fail parsing logic.
@@ -100,8 +100,11 @@ async function assertNonEmptyOrExplain(
 }
 
 /**
- * Runs the production legacy parser against raw HTML, logs diagnostics, and
- * asserts structural correctness on every extracted PR.
+ * Runs the production legacy parser against raw HTML (Tier 1 public repo lists),
+ * logs diagnostics, and asserts structural correctness on every extracted PR.
+ *
+ * WHY [legacy-only here]: Repo-scoped `/owner/repo/pulls` still uses classic
+ * list markup; authenticated global monitoring uses {@link parseSearchRouteAndAssert}.
  *
  * When the parser throws or returns zero results on a required target, the
  * first 5 000 chars of HTML are dumped to stderr — enough context to diagnose

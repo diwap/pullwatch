@@ -7,20 +7,18 @@
  * `launch() → getPageHTML() → close()` surface.
  *
  * When a shared `browser` is injected, this class only creates a new
- * `BrowserContext` so legacy and new-experience accounts never share cookies.
- * Why contexts, not just two tabs: a second `Page` on the same context shares
- * `document.cookie` and storage — the new bot would inherit the legacy session
- * and GitHub would route the wrong UI variant.
+ * `BrowserContext` so auth cookies stay isolated from other contexts on the
+ * same Chromium process.
+ * WHY [context not tab]: a second `Page` on the same context shares
+ * `document.cookie` and storage — another session would inherit this bot’s
+ * cookies and invalidate the authenticated `/pulls/search` signal.
  */
 
 import fs from 'node:fs';
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
 import { GITHUB_BASE_URL } from '@common/constants';
 import { isGitHubLoggedOutHtmlShell } from '@common/github-html-session';
-import {
-  isGitHubPageNotFoundDocument,
-  isGitHubPageNotFoundTitle,
-} from './github-page-signals';
+import { isGitHubPageNotFoundDocument, isGitHubPageNotFoundTitle } from './github-page-signals';
 import { stopAndSaveTrace, writeCanaryFailureSnapshot } from './failure-snapshot';
 import { getGitHubVerificationCode } from './gmail-fetcher';
 import { HAS_GMAIL_SECRETS, REALISTIC_UA } from './config';
@@ -44,7 +42,7 @@ export interface GitHubSessionOptions {
   stateFile: string;
   /**
    * When set, do not launch Chromium here — Tier 2’s parent already did. We only
-   * attach a fresh context so each chapter keeps isolated auth state on one process.
+   * attach a fresh context so this bot’s cookies stay isolated on one process.
    */
   browser?: Browser;
   /** Shown in login errors so operators fix the right GitHub Actions secret name. */
@@ -101,7 +99,9 @@ export class GitHubSession {
       timezoneId: 'America/New_York',
       ...(hasCachedState ? { storageState: stateFile } : {}),
     };
-    console.log(`  [pw] Creating browser context (storageState: ${hasCachedState ? 'CACHED' : 'NONE'})...`);
+    console.log(
+      `  [pw] Creating browser context (storageState: ${hasCachedState ? 'CACHED' : 'NONE'})...`
+    );
     this.context = await this.browser.newContext(contextOptions);
     console.log('  [pw] Browser context created');
     await this.context.tracing.start({ screenshots: true, snapshots: true, sources: true });
@@ -136,30 +136,32 @@ export class GitHubSession {
 
   /**
    * Waits for the React search dashboard only after the HTML shell is known-good.
-   * That keeps 404/login shells classified from captured HTML instead of timing
-   * out on selectors that can never exist there.
+   * WHY [search markers]: `/pulls/search` SSR/CSR surfaces `results-count` or
+   * `listitem-title-link`; bare `/pulls` inbox shells do not guarantee those.
+   * Classifying 404/login first avoids timing out on selectors that can never exist.
    */
   private async settleSearchSurface(): Promise<void> {
     // Non-empty `/pulls/search` can render both `results-count` and row title links.
     // `locator.or()` matches *all* union members, so waitFor hits strict-mode (2+ nodes).
     // Comma CSS + `.first()` waits until either signal exists while resolving to one element.
-    const searchSurface = this.page.locator(
-      '[data-testid="results-count"], [data-testid="listitem-title-link"]',
-    ).first();
+    const searchSurface = this.page
+      .locator('[data-testid="results-count"], [data-testid="listitem-title-link"]')
+      .first();
     await searchSurface.waitFor({ state: 'attached', timeout: 20_000 });
   }
 
   /**
-   * `goto`, capture URL/title/HTML, classify the shell, then settle the search UI
-   * only for an authenticated `/pulls/search` document.
+   * `goto`, classify the shell, then settle the search UI for `/pulls/search`.
+   * WHY [re-capture after settle]: search markers can appear after initial `load`;
+   * parsers need the settled DOM (SSR blob + list rows), not the pre-hydrate shell.
    */
   private async navigateToUrlAndCapture(requestedUrl: string): Promise<CapturedPullsShell> {
     await this.page.goto(requestedUrl, GOTO_OPTS);
     console.log('  [navigate] Waiting for document load...');
     await this.page.waitForLoadState('load', { timeout: 25_000 });
-    const finalUrl = this.page.url();
-    const title = await this.page.title();
-    const html = await this.page.content();
+    let finalUrl = this.page.url();
+    let title = await this.page.title();
+    let html = await this.page.content();
     const shell = this.classifyPullsShell(html, title, finalUrl);
     console.log(`  [navigate] Shell classification: ${shell}`);
 
@@ -173,10 +175,13 @@ export class GitHubSession {
         await stopAndSaveTrace(this.context, label);
         console.error(
           '  [navigate] Search shell classified ok, but expected search surface selectors did not attach. ' +
-            'HTML + Playwright trace saved under canary/.',
+            'HTML + Playwright trace saved under canary/.'
         );
         throw error;
       }
+      finalUrl = this.page.url();
+      title = await this.page.title();
+      html = await this.page.content();
     }
 
     return { html, title, finalUrl, shell };
@@ -189,8 +194,12 @@ export class GitHubSession {
    */
   private async loadPullsPageWithRecovery(url: string): Promise<string> {
     console.log(`  [navigate] Going to ${url} ...`);
-    let { html, title: pageTitle, finalUrl: pageUrl, shell } =
-      await this.navigateToUrlAndCapture(url);
+    let {
+      html,
+      title: pageTitle,
+      finalUrl: pageUrl,
+      shell,
+    } = await this.navigateToUrlAndCapture(url);
     let recoveredSession = false;
     let recoveryAttempts = 0;
 
@@ -205,8 +214,12 @@ export class GitHubSession {
       await this.refreshActiveUserContextForStaleSession();
       await new Promise((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt]));
       console.log(`  [navigate] Retrying: ${url}`);
-      ({ html, title: pageTitle, finalUrl: pageUrl, shell } =
-        await this.navigateToUrlAndCapture(url));
+      ({
+        html,
+        title: pageTitle,
+        finalUrl: pageUrl,
+        shell,
+      } = await this.navigateToUrlAndCapture(url));
       recoveredSession = true;
       recoveryAttempts = attempt + 1;
       console.log(`  [navigate] After recovery — landed on: ${pageUrl}`);
@@ -220,7 +233,7 @@ export class GitHubSession {
       await stopAndSaveTrace(this.context, label);
       throw new Error(
         `[canary] /pulls returns "Page not found" after ${recoveryAttempts} recovery attempts ` +
-          `(multi-account active-cookie likely missing). HTML + Playwright trace saved under canary/.`,
+          `(multi-account active-cookie likely missing). HTML + Playwright trace saved under canary/.`
       );
     }
 
@@ -230,14 +243,16 @@ export class GitHubSession {
       await stopAndSaveTrace(this.context, label);
       throw new Error(
         `[canary] ${url} returned a logged-out GitHub shell while Tier 2 believed it was authenticated. ` +
-          `HTML + Playwright trace saved under canary/.`,
+          `HTML + Playwright trace saved under canary/.`
       );
     }
 
     if (recoveredSession) {
       try {
         await this.context.storageState({ path: this.options.stateFile });
-        console.log(`  [state] Updated ${this.options.stateFile} after pulls 404 recovery (fixes next run’s cache)`);
+        console.log(
+          `  [state] Updated ${this.options.stateFile} after pulls 404 recovery (fixes next run’s cache)`
+        );
       } catch (e) {
         console.warn(`  [state] Could not persist storage after recovery: ${e}`);
       }
@@ -265,9 +280,7 @@ export class GitHubSession {
   }
 
   private accountLabel(): string {
-    return this.options.usernameEnvHint
-      .replace(/^GH_CANARY_USERNAME_/, '')
-      .toLowerCase();
+    return this.options.usernameEnvHint.replace(/^GH_CANARY_USERNAME_/, '').toLowerCase();
   }
 
   private escapeRegExp(value: string): string {
@@ -406,7 +419,7 @@ export class GitHubSession {
         '\n  ✗ [login] LOGIN FAILED — incorrect username or password\n' +
           `    Post-login URL: ${postLoginUrl}\n` +
           `    Page title: "${postLoginTitle}"\n` +
-          `    Action: Verify ${usernameEnvHint} and GH_CANARY_PASSWORD secrets.\n`,
+          `    Action: Verify ${usernameEnvHint} and GH_CANARY_PASSWORD secrets.\n`
       );
       return;
     }
@@ -438,16 +451,18 @@ export class GitHubSession {
     } else {
       const initialProbe = await this.probePullsForActiveRouting();
       if (initialProbe.shell === 'ok') {
-        console.log(`  ✓ [login] Account routing already active for @${username} (/pulls probe ok)`);
+        console.log(
+          `  ✓ [login] Account routing already active for @${username} (/pulls probe ok)`
+        );
         return;
       }
 
       console.warn(
-        `  [login] /pulls probe classified as ${initialProbe.shell}; opening account switcher for activation...`,
+        `  [login] /pulls probe classified as ${initialProbe.shell}; opening account switcher for activation...`
       );
       await this.page.goto(
         `${GITHUB_BASE_URL}/switch_account?return_to=${encodeURIComponent(`${GITHUB_BASE_URL}/pulls`)}`,
-        GOTO_OPTS,
+        GOTO_OPTS
       );
       await this.page.waitForLoadState('load', { timeout: 25_000 });
 
@@ -466,7 +481,7 @@ export class GitHubSession {
       throw new Error(
         `[canary] Account activation failed: /pulls still ${shellDescription} after ` +
           `the account switcher flow. Bot may not be in this session's account list, ` +
-          `GH_CANARY_USERNAME may not match the GitHub login, or GitHub changed activation semantics.`,
+          `GH_CANARY_USERNAME may not match the GitHub login, or GitHub changed activation semantics.`
       );
     }
 
@@ -520,21 +535,23 @@ export class GitHubSession {
     await stopAndSaveTrace(this.context, label);
     throw new Error(
       `[canary] Account activation failed: could not find an account switcher row for ` +
-        `"${username}" (candidates: ${candidates.join(', ')}). HTML + Playwright trace saved under canary/.`,
+        `"${username}" (candidates: ${candidates.join(', ')}). HTML + Playwright trace saved under canary/.`
     );
   }
 
   private async findAccountSwitcherAction(candidatePattern: RegExp): Promise<Locator | null> {
-    const labelledButton = this.page.getByRole('button', {
-      name: new RegExp(`^Select\\s+${candidatePattern.source}$`, 'i'),
-    }).first();
+    const labelledButton = this.page
+      .getByRole('button', {
+        name: new RegExp(`^Select\\s+${candidatePattern.source}$`, 'i'),
+      })
+      .first();
     if (await labelledButton.isVisible().catch(() => false)) return labelledButton;
 
     const rowButton = this.page
       .locator('.Box-row')
       .filter({ hasText: candidatePattern })
       .locator(
-        'form[action="/switch_account"] button, form[action="/switch_account"] input[type="submit"], form[action*="/switch_account"] button, form[action*="/switch_account"] input[type="submit"], form[action*="/login/account_switch"] button, form[action*="/login/account_switch"] input[type="submit"]',
+        'form[action="/switch_account"] button, form[action="/switch_account"] input[type="submit"], form[action*="/switch_account"] button, form[action*="/switch_account"] input[type="submit"], form[action*="/login/account_switch"] button, form[action*="/login/account_switch"] input[type="submit"]'
       )
       .first();
     if (await rowButton.isVisible().catch(() => false)) return rowButton;
@@ -556,20 +573,26 @@ export class GitHubSession {
   }
 
   private async clickAccountSwitcherAction(action: Locator): Promise<void> {
-    const responsePromise = this.page.waitForResponse(
-      (response) =>
-        (response.url().includes('/switch_account') ||
-          response.url().includes('/login/account_switch')) &&
-        response.status() < 400,
-      { timeout: 15_000 },
-    ).catch((error: unknown) => error);
+    const responsePromise = this.page
+      .waitForResponse(
+        (response) =>
+          (response.url().includes('/switch_account') ||
+            response.url().includes('/login/account_switch')) &&
+          response.status() < 400,
+        { timeout: 15_000 }
+      )
+      .catch((error: unknown) => error);
 
     await action.click();
     const switchResponse = await responsePromise;
     if (switchResponse instanceof Error) {
-      console.warn(`  [login] Account-switch click did not observe a <400 response: ${switchResponse}`);
+      console.warn(
+        `  [login] Account-switch click did not observe a <400 response: ${switchResponse}`
+      );
     }
-    await this.page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
+    await this.page
+      .waitForLoadState('domcontentloaded', { timeout: 15_000 })
+      .catch(() => undefined);
   }
 
   // ── Private: device verification ─────────────────────────────────────
@@ -583,12 +606,12 @@ export class GitHubSession {
    */
   private async handleDeviceVerification(
     postLoginUrl: string,
-    postLoginTitle: string,
+    postLoginTitle: string
   ): Promise<boolean> {
     console.log(
       '\n  ⚠ [login] DEVICE VERIFICATION DETECTED\n' +
         `    Post-login URL: ${postLoginUrl}\n` +
-        `    Page title: "${postLoginTitle}"`,
+        `    Page title: "${postLoginTitle}"`
     );
 
     if (!HAS_GMAIL_SECRETS) {
@@ -596,7 +619,7 @@ export class GitHubSession {
         '  [login] GMAIL secrets not configured — cannot auto-resolve device verification.\n' +
           '    Tier 2 tests will be skipped.\n' +
           '    Action: Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN secrets,\n' +
-          '    or manually approve the device from the canary bot email.\n',
+          '    or manually approve the device from the canary bot email.\n'
       );
       return false;
     }
@@ -652,7 +675,7 @@ export class GitHubSession {
       console.error(
         '  ✗ [login] Still on verification/login page after OTP submission.\n' +
           `    URL: ${postVerifyUrl}\n` +
-          '    The OTP may have been invalid or expired. Tier 2 tests will be skipped.\n',
+          '    The OTP may have been invalid or expired. Tier 2 tests will be skipped.\n'
       );
       return false;
     }

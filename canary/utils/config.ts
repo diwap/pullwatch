@@ -16,14 +16,11 @@ export { GITHUB_BASE_URL };
 // ── GitHub coordinates ───────────────────────────────────────────────────
 
 /**
- * Separate `storageState` paths per bot so CI cache and local runs never mix cookies
- * between accounts. GitHub’s pulls UI depends on account feature flags — sharing one
- * file would make Chapter 2 see Chapter 1’s session and invalidate the test signal.
+ * WHY [single state]: Authenticated Tier 2 uses one bot against `/pulls/search`.
+ * A single Playwright `storageState` file avoids mixing cookies across accounts
+ * and matches the one-session canary shape after the global dashboard GA.
  */
-export const STATE_FILE_LEGACY = 'playwright-state-legacy.json';
-
-/** Same rationale as legacy: new-experience bot must not inherit the other account’s cookies. */
-export const STATE_FILE_NEW = 'playwright-state-new.json';
+export const STATE_FILE = 'playwright-state.json';
 
 // ── Typed env loader (Tier 2 credentials + Gmail) ───────────────────────
 
@@ -40,6 +37,9 @@ type CanaryEnvBase = {
   warnings: string[];
 };
 
+/** Which Actions secret supplied the Tier 2 username (for operator-facing errors). */
+export type CanaryUsernameEnvHint = 'GH_CANARY_USERNAME_NEW' | 'GH_CANARY_USERNAME_LEGACY';
+
 /**
  * Discriminated union for canary credentials. Use `mode` to branch; each variant
  * carries only the fields that are valid for that configuration — avoids “half-set”
@@ -47,13 +47,12 @@ type CanaryEnvBase = {
  */
 export type CanaryEnv =
   | (CanaryEnvBase & { mode: 'public-only' })
-  | (CanaryEnvBase & { mode: 'legacy-only'; legacyUsername: string; password: string })
-  | (CanaryEnvBase & { mode: 'new-only'; newUsername: string; password: string })
   | (CanaryEnvBase & {
-      mode: 'full';
-      legacyUsername: string;
-      newUsername: string;
+      mode: 'authenticated';
+      username: string;
       password: string;
+      /** Secret name that supplied `username` — shown in Playwright login errors. */
+      usernameEnvHint: CanaryUsernameEnvHint;
     });
 
 function parseGmailSecrets(): { gmail: CanaryGmailSecrets | null; partial: boolean } {
@@ -68,15 +67,35 @@ function parseGmailSecrets(): { gmail: CanaryGmailSecrets | null; partial: boole
 }
 
 /**
- * Reads process env once and returns a tagged union describing which Tier 2 chapters
- * can run. Emits {@link CanaryEnv.warnings} when env looks mis-set (e.g. username without password).
+ * WHY [NEW then LEGACY]: Prefer `GH_CANARY_USERNAME_NEW`; fall back to
+ * `GH_CANARY_USERNAME_LEGACY` so existing CI secrets keep working without a
+ * same-PR secret rename. Both map to the same `/pulls/search` Tier 2 path.
+ */
+function resolveAuthUsername(): {
+  username: string;
+  source: CanaryUsernameEnvHint | null;
+  newUser: string;
+  legacyUser: string;
+} {
+  const newUser = (process.env.GH_CANARY_USERNAME_NEW ?? '').trim();
+  const legacyUser = (process.env.GH_CANARY_USERNAME_LEGACY ?? '').trim();
+  if (newUser) {
+    return { username: newUser, source: 'GH_CANARY_USERNAME_NEW', newUser, legacyUser };
+  }
+  if (legacyUser) {
+    return { username: legacyUser, source: 'GH_CANARY_USERNAME_LEGACY', newUser, legacyUser };
+  }
+  return { username: '', source: null, newUser, legacyUser };
+}
+
+/**
+ * Reads process env once and returns a tagged union describing whether Tier 2
+ * can authenticate. Emits {@link CanaryEnv.warnings} when env looks mis-set.
  */
 export function loadCanaryEnv(): CanaryEnv {
   const warnings: string[] = [];
-
-  const legacyUser = (process.env.GH_CANARY_USERNAME_LEGACY ?? '').trim();
-  const newUser = (process.env.GH_CANARY_USERNAME_NEW ?? '').trim();
   const password = (process.env.GH_CANARY_PASSWORD ?? '').trim();
+  const { username, source, newUser, legacyUser } = resolveAuthUsername();
 
   const { gmail, partial: gmailPartial } = parseGmailSecrets();
   if (gmailPartial) {
@@ -85,88 +104,64 @@ export function loadCanaryEnv(): CanaryEnv {
     );
   }
 
-  const legacyUserPresent = legacyUser.length > 0;
-  const newUserPresent = newUser.length > 0;
+  const usernamePresent = username.length > 0;
   const passwordPresent = password.length > 0;
+  // Default hint when nothing is set — operators still know which secret to create first.
+  const usernameEnvHint: CanaryUsernameEnvHint = source ?? 'GH_CANARY_USERNAME_NEW';
 
-  if (legacyUserPresent && !passwordPresent) {
+  if (usernamePresent && !passwordPresent) {
     warnings.push(
-      'GH_CANARY_USERNAME_LEGACY is set but GH_CANARY_PASSWORD is empty — Chapter 1 will not run (password required).'
+      `${usernameEnvHint} is set but GH_CANARY_PASSWORD is empty — Tier 2 will not run (password required).`
     );
   }
-  if (newUserPresent && !passwordPresent) {
+  if (passwordPresent && !usernamePresent) {
     warnings.push(
-      'GH_CANARY_USERNAME_NEW is set but GH_CANARY_PASSWORD is empty — Chapter 2 will not run (password required).'
+      'GH_CANARY_PASSWORD is set but neither GH_CANARY_USERNAME_NEW nor GH_CANARY_USERNAME_LEGACY is set — Tier 2 skipped.'
     );
   }
-  if (passwordPresent && !legacyUserPresent && !newUserPresent) {
+  if (newUser.length > 0 && legacyUser.length > 0 && newUser !== legacyUser) {
     warnings.push(
-      'GH_CANARY_PASSWORD is set but neither GH_CANARY_USERNAME_LEGACY nor GH_CANARY_USERNAME_NEW is set — Tier 2 skipped.'
+      'Both GH_CANARY_USERNAME_NEW and GH_CANARY_USERNAME_LEGACY are set — using NEW; LEGACY is ignored (compat alias only).'
     );
   }
-
-  const hasLegacyPair = legacyUserPresent && passwordPresent;
-  const hasNewPair = newUserPresent && passwordPresent;
 
   const base = (): CanaryEnvBase => ({ gmail, warnings });
 
-  if (!hasLegacyPair && !hasNewPair) {
+  if (!usernamePresent || !passwordPresent) {
     return { ...base(), mode: 'public-only' };
-  }
-  if (hasLegacyPair && !hasNewPair) {
-    return {
-      ...base(),
-      mode: 'legacy-only',
-      legacyUsername: legacyUser,
-      password,
-    };
-  }
-  if (!hasLegacyPair && hasNewPair) {
-    return {
-      ...base(),
-      mode: 'new-only',
-      newUsername: newUser,
-      password,
-    };
   }
   return {
     ...base(),
-    mode: 'full',
-    legacyUsername: legacyUser,
-    newUsername: newUser,
+    mode: 'authenticated',
+    username,
     password,
+    usernameEnvHint,
   };
 }
 
 /** Singleton env snapshot for the test process (read once at module load). */
 export const canaryEnv: CanaryEnv = loadCanaryEnv();
 
-/** When false, Chapter 1 is skipped — no usable legacy bot configuration. */
-export const HAS_LEGACY_CREDENTIALS =
-  canaryEnv.mode === 'legacy-only' || canaryEnv.mode === 'full';
-
-/** When false, Chapter 2 is skipped — no usable new-dashboard bot configuration. */
-export const HAS_NEW_CREDENTIALS = canaryEnv.mode === 'new-only' || canaryEnv.mode === 'full';
-
 /**
- * Parent Tier 2 describe runs only if at least one chapter can authenticate.
- * Why: avoid launching Chromium when both usernames are missing (faster, clearer logs).
+ * Parent Tier 2 describe runs only when auth credentials are complete.
+ * WHY: avoid launching Chromium when username/password are missing (faster, clearer logs).
  */
-export const HAS_ANY_AUTH_CREDENTIALS = canaryEnv.mode !== 'public-only';
+export const HAS_AUTH_CREDENTIALS = canaryEnv.mode === 'authenticated';
 
 export const HAS_GMAIL_SECRETS = canaryEnv.gmail !== null;
 
-/** Empty string when that chapter’s bot is not configured. */
-export const CANARY_LEGACY_USERNAME =
-  canaryEnv.mode === 'legacy-only' || canaryEnv.mode === 'full' ? canaryEnv.legacyUsername : '';
+/** Empty when Tier 2 cannot run. */
+export const CANARY_USERNAME = canaryEnv.mode === 'authenticated' ? canaryEnv.username : '';
 
-/** Empty string when that chapter’s bot is not configured. */
-export const CANARY_NEW_USERNAME =
-  canaryEnv.mode === 'new-only' || canaryEnv.mode === 'full' ? canaryEnv.newUsername : '';
+/**
+ * Env var name to show in login errors — taken from {@link canaryEnv}, not re-parsed.
+ * Falls back to NEW when Tier 2 is skipped so error copy still names a real secret.
+ */
+export const CANARY_USERNAME_ENV_HINT: CanaryUsernameEnvHint =
+  canaryEnv.mode === 'authenticated' ? canaryEnv.usernameEnvHint : 'GH_CANARY_USERNAME_NEW';
 
 /** Shared password; empty when Tier 2 cannot run. */
-export const CANARY_PASSWORD =
-  canaryEnv.mode === 'public-only' ? '' : canaryEnv.password;
+export const CANARY_PASSWORD = canaryEnv.mode === 'authenticated' ? canaryEnv.password : '';
 
 // ── HTTP identity ────────────────────────────────────────────────────────
 // GitHub aggressively blocks non-browser User-Agents with 429s or CAPTCHAs.
@@ -177,8 +172,7 @@ export const REALISTIC_UA =
 
 export const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent': REALISTIC_UA,
-  Accept:
-    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
   'Cache-Control': 'no-cache',
   'Sec-Fetch-Dest': 'document',
@@ -199,9 +193,9 @@ export interface CanaryTarget {
    */
   requireResults: boolean;
   /**
-   * Chapter 2 only: when true and the page looks like the new dashboard, we hard-require
+   * Tier 2 only: when true and the page looks like the new dashboard, we hard-require
    * a non-null result from `GitHubEmbeddedJsonPullHarvest` before accepting HTML fallback.
-   * Why: merged `@me` is a high-signal target (usually non-empty); proving the SSR blob
+   * WHY: merged `@me` is a high-signal target (usually non-empty); proving the SSR blob
    * path works there catches envelope drift without flaking on legitimately empty queries.
    */
   requireEmbeddedJson?: boolean;
@@ -221,40 +215,40 @@ export const PUBLIC_TARGETS: CanaryTarget[] = [
 ];
 
 /**
- * Chapter 1 — URLs shaped like the legacy global pulls list (`/pulls?q=…`).
- * Why: production’s legacy route uses `GitHubHTMLParser` only; the canary must exercise
- * that same document shape for users who are not on the new dashboard.
+ * Tier 2 — authenticated global pulls on `/pulls/search?q=…`.
+ * WHY [search URL]: Production defaults the route hint to `search`; that path
+ * carries the SSR embedded JSON blob the dual-probe and waterfall exercise.
+ * Bare `/pulls` is the GA inbox shell, not a classic scrapable list contract.
  */
-export const AUTH_TARGETS: CanaryTarget[] = [
+const AUTH_QUERY_TEMPLATES: Array<{
+  label: string;
+  /** `/pulls?q=…` form; mapped through `toPullsSearchUrl` before export. */
+  pullsQueryUrl: string;
+  requireResults: boolean;
+}> = [
   {
-    label: 'Auth: Assigned PRs (review-requested:@me)',
-    url: `${GITHUB_BASE_URL}/pulls?q=is%3Aopen+is%3Apr+user-review-requested%3A%40me+`,
+    label: 'Auth (search): Assigned PRs (review-requested:@me)',
+    pullsQueryUrl: `${GITHUB_BASE_URL}/pulls?q=is%3Aopen+is%3Apr+user-review-requested%3A%40me+`,
     requireResults: false,
   },
   {
-    label: 'Auth: Merged PRs (author:@me)',
-    url: `${GITHUB_BASE_URL}/pulls?q=is%3Apr+is%3Amerged+author%3A%40me`,
+    label: 'Auth (search): Merged PRs (author:@me)',
+    pullsQueryUrl: `${GITHUB_BASE_URL}/pulls?q=is%3Apr+is%3Amerged+author%3A%40me`,
     requireResults: true,
   },
 ];
 
-/**
- * Chapter 2 — same filters as {@link AUTH_TARGETS} but `/pulls/search?q=…`.
- * `requireEmbeddedJson` is enabled only where `requireResults` is true so we assert SSR JSON
- * on the merged list (expected data) and not on assigned reviews (often empty for the bot).
- */
-export const AUTH_TARGETS_SEARCH: CanaryTarget[] = AUTH_TARGETS.map((t) => ({
-  ...t,
-  label: t.label.replace(/^Auth:/, 'Auth (search):'),
-  url: toPullsSearchUrl(t.url),
-  requireEmbeddedJson: t.requireResults ? true : t.requireEmbeddedJson,
+export const AUTH_TARGETS: CanaryTarget[] = AUTH_QUERY_TEMPLATES.map((t) => ({
+  label: t.label,
+  url: toPullsSearchUrl(t.pullsQueryUrl),
+  requireResults: t.requireResults,
+  // WHY: assert SSR JSON only where we expect rows (merged); assigned may be empty.
+  requireEmbeddedJson: t.requireResults ? true : undefined,
 }));
 
 // ── Env-var diagnostics (side-effect at import time) ─────────────────────
 
-const ch1 = HAS_LEGACY_CREDENTIALS ? 'RUN' : 'SKIP';
-const ch2 = HAS_NEW_CREDENTIALS ? 'RUN' : 'SKIP';
-const tier2 = HAS_ANY_AUTH_CREDENTIALS ? 'RUN (browser if any chapter)' : 'SKIP';
+const tier2 = HAS_AUTH_CREDENTIALS ? 'RUN' : 'SKIP';
 
 console.log(`\n[env] canaryEnv.mode: ${canaryEnv.mode}`);
 if (canaryEnv.warnings.length > 0) {
@@ -262,9 +256,11 @@ if (canaryEnv.warnings.length > 0) {
     console.warn(`[env] ⚠ ${w}`);
   }
 }
-console.log(`[env] GH_CANARY_USERNAME_LEGACY present: ${CANARY_LEGACY_USERNAME.length > 0}`);
-console.log(`[env] GH_CANARY_USERNAME_NEW present: ${CANARY_NEW_USERNAME.length > 0}`);
+console.log(
+  `[env] auth username present: ${CANARY_USERNAME.length > 0} (via ${CANARY_USERNAME_ENV_HINT})`
+);
 console.log(`[env] GH_CANARY_PASSWORD present: ${CANARY_PASSWORD.length > 0}`);
-console.log(`[env] Chapter 1 (legacy): ${ch1} | Chapter 2 (new): ${ch2}`);
-console.log(`[env] Tier 2 parent: ${tier2}`);
-console.log(`[env] GMAIL secrets present: ${HAS_GMAIL_SECRETS} → Device verification bypass ${HAS_GMAIL_SECRETS ? 'ENABLED' : 'DISABLED'}\n`);
+console.log(`[env] Tier 2 (/pulls/search): ${tier2}`);
+console.log(
+  `[env] GMAIL secrets present: ${HAS_GMAIL_SECRETS} → Device verification bypass ${HAS_GMAIL_SECRETS ? 'ENABLED' : 'DISABLED'}\n`
+);

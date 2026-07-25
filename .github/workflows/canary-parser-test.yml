@@ -55,22 +55,20 @@ jobs:
         run: npx playwright install-deps chromium
         if: steps.pw-cache.outputs.cache-hit == 'true'
 
-      # ── Playwright session state caching (legacy + new bot) ─────
+      # ── Playwright session state caching (single auth bot) ─────
       - name: Restore Playwright session state
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.force_fresh_login == true) }}
         uses: actions/cache@v4
         id: pw-state
         with:
-          path: |
-            playwright-state-legacy.json
-            playwright-state-new.json
+          path: playwright-state.json
           key: playwright-state-${{ github.run_id }}
           restore-keys: |
             playwright-state-
 
       - name: Delete cached session state (force fresh login)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.force_fresh_login == true }}
-        run: rm -f playwright-state-legacy.json playwright-state-new.json
+        run: rm -f playwright-state.json
 
       # ── Run canary tests (tee log for observability markers) ─────
       - name: Run canary parser tests
@@ -80,8 +78,9 @@ jobs:
           npm run canary:test 2>&1 | tee canary.log
         env:
           GH_CANARY_PAT: ${{ secrets.GH_CANARY_PAT }}
-          GH_CANARY_USERNAME_LEGACY: ${{ secrets.GH_CANARY_USERNAME_LEGACY }}
+          # NEW is preferred; LEGACY is a compat alias if NEW is unset (same /pulls/search Tier 2).
           GH_CANARY_USERNAME_NEW: ${{ secrets.GH_CANARY_USERNAME_NEW }}
+          GH_CANARY_USERNAME_LEGACY: ${{ secrets.GH_CANARY_USERNAME_LEGACY }}
           GH_CANARY_PASSWORD: ${{ secrets.GH_CANARY_PASSWORD }}
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
@@ -145,8 +144,7 @@ jobs:
             canary/traces/
             canary/traces/**/*.zip
             canary.log
-            playwright-state-legacy.json
-            playwright-state-new.json
+            playwright-state.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -181,9 +179,9 @@ jobs:
             DESC="GitHub is reporting degraded status (\`${{ steps.gh-status.outputs.indicator }}\`). The canary failure is likely due to a GitHub outage, NOT a DOM change. Monitor https://www.githubstatus.com and wait for recovery."
             COLOR=16776960
           else
-            CONTENT='@here **Parser Canary FAILED. GitHub may have changed their DOM.**'
-            TITLE='Possible GitHub DOM Change'
-            DESC='The hourly parser canary detected a possible GitHub DOM change. Inspect the run log and update patterns / parsers as needed.'
+            CONTENT='@here **Parser Canary FAILED. GitHub may have changed their DOM or SSR payload.**'
+            TITLE='Possible GitHub DOM / SSR Change'
+            DESC='The hourly parser canary failed (Tier 1 public repo lists and/or Tier 2 authenticated `/pulls/search`). Inspect the run log; update legacy patterns for Tier 1 or embedded JSON / `newExperience` for Tier 2.'
             COLOR=16711680
           fi
 

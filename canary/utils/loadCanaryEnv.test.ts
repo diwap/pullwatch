@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+/// <reference types="vitest/globals" />
 import { loadCanaryEnv } from './config';
 
 /** Prevent real machine / CI env from affecting union outcomes. */
@@ -23,48 +23,56 @@ describe('loadCanaryEnv', () => {
     expect(env.gmail).toBeNull();
   });
 
-  it('returns legacy-only when legacy username and password are set', () => {
-    stubBaseEmpty();
-    vi.stubEnv('GH_CANARY_USERNAME_LEGACY', 'legacy-bot');
-    vi.stubEnv('GH_CANARY_PASSWORD', 'secret');
-    const env = loadCanaryEnv();
-    expect(env.mode).toBe('legacy-only');
-    expect(env).toMatchObject({
-      mode: 'legacy-only',
-      legacyUsername: 'legacy-bot',
-      password: 'secret',
-    });
-  });
-
-  it('returns new-only when new username and password are set', () => {
+  it('returns authenticated when NEW username and password are set', () => {
     stubBaseEmpty();
     vi.stubEnv('GH_CANARY_USERNAME_NEW', 'new-bot');
     vi.stubEnv('GH_CANARY_PASSWORD', 'secret');
     const env = loadCanaryEnv();
-    expect(env.mode).toBe('new-only');
     expect(env).toMatchObject({
-      mode: 'new-only',
-      newUsername: 'new-bot',
+      mode: 'authenticated',
+      username: 'new-bot',
       password: 'secret',
+      usernameEnvHint: 'GH_CANARY_USERNAME_NEW',
     });
   });
 
-  it('returns full when both usernames and password are set', () => {
+  it('returns authenticated using LEGACY username as compat alias when NEW is unset', () => {
+    stubBaseEmpty();
+    vi.stubEnv('GH_CANARY_USERNAME_LEGACY', 'legacy-bot');
+    vi.stubEnv('GH_CANARY_PASSWORD', 'secret');
+    const env = loadCanaryEnv();
+    expect(env).toMatchObject({
+      mode: 'authenticated',
+      username: 'legacy-bot',
+      password: 'secret',
+      usernameEnvHint: 'GH_CANARY_USERNAME_LEGACY',
+    });
+  });
+
+  it('prefers NEW over LEGACY when both are set and warns about the alias', () => {
     stubBaseEmpty();
     vi.stubEnv('GH_CANARY_USERNAME_LEGACY', 'legacy-bot');
     vi.stubEnv('GH_CANARY_USERNAME_NEW', 'new-bot');
     vi.stubEnv('GH_CANARY_PASSWORD', 'secret');
     const env = loadCanaryEnv();
-    expect(env.mode).toBe('full');
     expect(env).toMatchObject({
-      mode: 'full',
-      legacyUsername: 'legacy-bot',
-      newUsername: 'new-bot',
+      mode: 'authenticated',
+      username: 'new-bot',
       password: 'secret',
+      usernameEnvHint: 'GH_CANARY_USERNAME_NEW',
     });
+    expect(env.warnings.some((w) => w.includes('using NEW'))).toBe(true);
   });
 
-  it('treats legacy username without password as public-only and records a warning', () => {
+  it('treats username without password as public-only and records a warning', () => {
+    stubBaseEmpty();
+    vi.stubEnv('GH_CANARY_USERNAME_NEW', 'orphan-user');
+    const env = loadCanaryEnv();
+    expect(env.mode).toBe('public-only');
+    expect(env.warnings.some((w) => w.includes('GH_CANARY_USERNAME_NEW'))).toBe(true);
+  });
+
+  it('treats LEGACY username without password as public-only and records a warning', () => {
     stubBaseEmpty();
     vi.stubEnv('GH_CANARY_USERNAME_LEGACY', 'orphan-user');
     const env = loadCanaryEnv();
