@@ -39,6 +39,10 @@ vi.mock('@src/components/ui/tabs/tab-panel', () => ({
   TabPanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+vi.mock('@src/components/lists/today-list', () => ({
+  TodayList: () => <div data-testid="today-stub" />,
+}));
+
 vi.mock('@src/components/lists/assigned-list', () => ({
   AssignedList: () => <div data-testid="assigned-stub" />,
 }));
@@ -49,6 +53,10 @@ vi.mock('@src/components/lists/authored-list', () => ({
 
 vi.mock('@src/components/lists/merged-list', () => ({
   MergedList: () => <div data-testid="merged-stub" />,
+}));
+
+vi.mock('@src/hooks/use-today-prs', () => ({
+  useTodayPRs: () => ({ data: [], isSuccess: false }),
 }));
 
 vi.mock('@src/hooks/use-assigned-prs', () => ({

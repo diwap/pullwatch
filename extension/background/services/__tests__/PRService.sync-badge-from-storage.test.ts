@@ -5,6 +5,7 @@ import {
   STORAGE_KEY_ASSIGNED_PRS,
   STORAGE_KEY_GITHUB_OUTAGE,
   STORAGE_KEY_PARSER_BREAKAGE,
+  STORAGE_KEY_TODAY_PRS,
 } from '@common/constants';
 import { DEFAULT_EXTENSION_SETTINGS } from '@common/extension-settings-defaults';
 
@@ -97,6 +98,7 @@ describe('PRService.syncBadgeFromStorage', () => {
   it('sets PR count from stored assigned PRs (pending only, drafts hidden)', async () => {
     get.mockResolvedValue(null);
     getStoredPRs.mockImplementation(async (key: string) => {
+      if (key === STORAGE_KEY_TODAY_PRS) return { prs: [], timestamp: Date.now() };
       if (key !== STORAGE_KEY_ASSIGNED_PRS) return null;
       return {
         prs: [
@@ -123,6 +125,7 @@ describe('PRService.syncBadgeFromStorage', () => {
   it('includes drafts in count when showDraftsInList is true', async () => {
     get.mockResolvedValue(null);
     getStoredPRs.mockImplementation(async (key: string) => {
+      if (key === STORAGE_KEY_TODAY_PRS) return { prs: [], timestamp: Date.now() };
       if (key !== STORAGE_KEY_ASSIGNED_PRS) return null;
       return {
         prs: [
@@ -144,7 +147,32 @@ describe('PRService.syncBadgeFromStorage', () => {
     expect(setPRCountBadge).toHaveBeenCalledWith(2);
   });
 
-  it('passes zero when no assigned PRs in storage', async () => {
+  it('uses Today count on the toolbar badge when To Review is empty', async () => {
+    get.mockResolvedValue(null);
+    getStoredPRs.mockImplementation(async (key: string) => {
+      if (key === STORAGE_KEY_TODAY_PRS) {
+        return {
+          prs: [
+            makePR({ id: 't1', url: 'https://github.com/o/r/pull/1', type: 'open' }),
+            makePR({ id: 't2', url: 'https://github.com/o/r/pull/2', type: 'open' }),
+            makePR({ id: 't3', url: 'https://github.com/o/r/pull/3', type: 'open' }),
+            makePR({ id: 't4', url: 'https://github.com/o/r/pull/4', type: 'open' }),
+          ],
+          timestamp: Date.now(),
+        };
+      }
+      if (key === STORAGE_KEY_ASSIGNED_PRS) return { prs: [], timestamp: Date.now() };
+      return null;
+    });
+    getExtensionSettings.mockResolvedValue(DEFAULT_EXTENSION_SETTINGS);
+
+    const pr = makeService();
+    await pr.syncBadgeFromStorage();
+
+    expect(setPRCountBadge).toHaveBeenCalledWith(4);
+  });
+
+  it('passes zero when no assigned or Today PRs in storage', async () => {
     get.mockResolvedValue(null);
     getStoredPRs.mockResolvedValue(null);
     getExtensionSettings.mockResolvedValue(DEFAULT_EXTENSION_SETTINGS);

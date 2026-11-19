@@ -8,6 +8,10 @@ import { ToReviewPrsNotificationSection } from '../notifications/components/to-r
 import { MergedPrsNotificationSection } from '../notifications/components/merged-prs-notification-section';
 import { useAssignedDraftNotifyListSync } from '../notifications/hooks/use-assigned-draft-notify-list-sync';
 import { LinkBehaviorField } from '../behavior/components/link-behavior-field';
+import { OrgFilterField } from '../inbox/org-filter-field';
+import { DateRangeField } from '../inbox/date-range-field';
+import { ShowHiddenField } from '../inbox/show-hidden-field';
+import { GitHubTokenField } from '../github-token/github-token-field';
 import { ThemePicker } from '../appearance/components/theme-picker';
 import { PopupSizeField } from '../appearance/components/popup-size-field';
 import { SettingsSponsorLounge } from '../support/components/settings-sponsor-lounge';
@@ -95,6 +99,16 @@ export const SettingsPage = ({ onClose }: SettingsPageProps) => {
         </SettingsPageHeader>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar px-5 pb-4 pt-3 flex flex-col gap-5">
+          <SettingsSection title="Inbox">
+            <OrgFilterField />
+            <DateRangeField />
+            <ShowHiddenField />
+          </SettingsSection>
+
+          <SettingsSection title="GitHub token">
+            <GitHubTokenField />
+          </SettingsSection>
+
           <SettingsSection title="To Review PRs">
             <ToReviewPrsNotificationSection draftSync={draftSync} />
           </SettingsSection>

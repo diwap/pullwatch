@@ -21,5 +21,21 @@ describe('ensureCompleteSettings', () => {
       DEFAULT_EXTENSION_SETTINGS.assigned.notificationsEnabled
     );
     expect(merged.merged).toEqual(DEFAULT_EXTENSION_SETTINGS.merged);
+    expect(merged.inbox).toEqual(DEFAULT_EXTENSION_SETTINGS.inbox);
+  });
+
+  it('normalizes a blank org filter to all organizations', () => {
+    const merged = ensureCompleteSettings({
+      inbox: { orgFilter: '  all ', dateRange: '30d', showHidden: true },
+    });
+    expect(merged.inbox.orgFilter).toBe('');
+    expect(merged.inbox.dateRange).toBe('30d');
+    expect(merged.inbox.showHidden).toBe(true);
+  });
+
+  it('defaults dateRange and showHidden when inbox is missing', () => {
+    const merged = ensureCompleteSettings({});
+    expect(merged.inbox.dateRange).toBe('all');
+    expect(merged.inbox.showHidden).toBe(false);
   });
 });

@@ -15,10 +15,12 @@ import {
   STORAGE_KEY_ASSIGNED_PRS,
   STORAGE_KEY_AUTHORED_PRS,
   STORAGE_KEY_GITHUB_OUTAGE,
+  STORAGE_KEY_HIDDEN_PR_IDS,
   STORAGE_KEY_LAST_UNTRUSTED_FETCH_AT,
   STORAGE_KEY_MERGED_PRS,
   STORAGE_KEY_PARSER_BREAKAGE,
   STORAGE_KEY_ROUTE_HINT,
+  STORAGE_KEY_TODAY_PRS,
 } from '@common/constants';
 import { chromeExtensionService } from '@common/chrome-extension-service';
 import { delay } from '@common/utils';
@@ -43,6 +45,7 @@ import {
 import type { GitHubStatusSnapshot } from '@background/interfaces/IGitHubStatusClient';
 import { PrFetchErrorHandler } from '@background/domain/PrFetchErrorHandler';
 import { GITHUB_ORIGIN_PATTERN, type SiteAccessProbe } from '@common/site-access-classifier';
+import { countVisibleInboxBadge, hiddenPrIdSet } from '@common/pr-visibility';
 
 /**
  * Backs {@link SiteAccessProbe} with `chrome.permissions.contains` via the shared adapter. Lives
@@ -790,7 +793,9 @@ export class PRService implements IPRService {
     await this.storageService.setStoredPRs(STORAGE_KEY_ASSIGNED_PRS, allPRs);
     this.markListRefreshedForCurrentViewer('assigned');
     await this.storageService.setLastFetchTime(Date.now());
-    await this.badgeService.setPRCountBadge(filteredPendingCount);
+    await this.badgeService.setPRCountBadge(
+      await this.visibleInboxBadgeCount(allPRs, filteredPendingCount)
+    );
 
     // WHY [sound last]: see ordering rationale above. Sound must follow `setStoredPRs` so a
     // worker suspension during playback cannot resurrect the PR as "new" on the next alarm.
@@ -926,6 +931,48 @@ export class PRService implements IPRService {
     return { newPRs, allPRsWithStatus };
   }
 
+  /**
+   * Hidden ids live in local storage. A missing `get` (older test doubles) or a
+   * read failure means "nothing hidden" so the badge still updates.
+   */
+  private async readHiddenPrIds(): Promise<Set<string>> {
+    try {
+      return hiddenPrIdSet(await this.storageService.get(STORAGE_KEY_HIDDEN_PR_IDS));
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * Badge count from Today + pending To Review after org/hidden/(date) filters.
+   * Falls back to the draft-filtered pending count the caller already computed when
+   * settings or Today storage cannot be read.
+   */
+  private async visibleInboxBadgeCount(
+    assignedPRs: PullRequest[],
+    fallbackCount: number
+  ): Promise<number> {
+    try {
+      const settings = await this.storageService.getExtensionSettings();
+      const hidden = await this.readHiddenPrIds();
+      const today = (await this.storageService.getStoredPRs(STORAGE_KEY_TODAY_PRS))?.prs ?? [];
+      return countVisibleInboxBadge(
+        today,
+        assignedPRs,
+        settings.assigned.showDraftsInList,
+        settings.inbox?.orgFilter,
+        hidden,
+        settings.inbox?.dateRange
+      );
+    } catch (error) {
+      this.debugService.warn(
+        '[PRService] Inbox badge filter failed; using unfiltered pending count',
+        error
+      );
+      return fallbackCount;
+    }
+  }
+
   async getStoredAssignedPRs(): Promise<PullRequest[]> {
     const stored = await this.storageService.getStoredPRs(STORAGE_KEY_ASSIGNED_PRS);
     return stored?.prs || [];
@@ -934,9 +981,9 @@ export class PRService implements IPRService {
   /**
    * WHY [ordering + source of truth]: Invoked from `BackgroundManager.performInitialSetup`
    * before `EventService` handlers. Event handlers are heterogeneous; this step aligns the
-   * toolbar badge with persisted state (`chrome.storage.local` assigned PRs, sync settings,
-   * health flags) up front. Precedence matches fetch error handling: parser / outage flags
-   * imply error badge; otherwise pending count respects `assigned.showDraftsInList`.
+   * toolbar badge with persisted state (`chrome.storage.local` Today + assigned PRs, sync
+   * settings, health flags) up front. Precedence matches fetch error handling: parser /
+   * outage flags imply error badge; otherwise count is visible Today ∪ pending To Review.
    */
   async syncBadgeFromStorage(): Promise<void> {
     const [parserBreakage, githubOutage] = await Promise.all([
@@ -949,15 +996,20 @@ export class PRService implements IPRService {
       return;
     }
 
-    const [prs, settings] = await Promise.all([
+    const [assigned, todayStored, settings] = await Promise.all([
       this.getStoredAssignedPRs(),
+      this.storageService.getStoredPRs(STORAGE_KEY_TODAY_PRS),
       this.storageService.getExtensionSettings(),
     ]);
-    const pending = prs.filter((pr) => pr.reviewStatus !== 'reviewed');
-    const count = filterPendingAssignedByDraftSetting(
-      pending,
-      settings.assigned.showDraftsInList
-    ).length;
+    const hidden = await this.readHiddenPrIds();
+    const count = countVisibleInboxBadge(
+      todayStored?.prs ?? [],
+      assigned,
+      settings.assigned.showDraftsInList,
+      settings.inbox?.orgFilter,
+      hidden,
+      settings.inbox?.dateRange
+    );
     await this.badgeService.setPRCountBadge(count);
   }
 

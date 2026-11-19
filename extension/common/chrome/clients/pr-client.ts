@@ -2,10 +2,12 @@ import {
   STORAGE_KEY_ASSIGNED_PRS,
   STORAGE_KEY_AUTHORED_PRS,
   STORAGE_KEY_MERGED_PRS,
+  STORAGE_KEY_PR_DETAILS,
+  STORAGE_KEY_TODAY_PRS,
 } from '../../constants';
 import { PR_DATA_ACTION } from '../../runtime-actions';
 import { runWithTransientStorageRetry } from '../../transient-storage-retry';
-import type { PullRequest, StoredPRs } from '../../types';
+import type { PrDetailsMap, PullRequest, StoredPRs } from '../../types';
 import type { StorageAdapter } from '../adapters/storage-adapter';
 import { canReadLocalStorage } from '../chrome-globals';
 import type { BackgroundActionClient } from './background-action-client';
@@ -31,6 +33,18 @@ export class PrClient {
 
   readAuthoredFromLocal(): Promise<PullRequest[]> {
     return this.readFromLocal(STORAGE_KEY_AUTHORED_PRS);
+  }
+
+  readTodayFromLocal(): Promise<PullRequest[]> {
+    return this.readFromLocal(STORAGE_KEY_TODAY_PRS);
+  }
+
+  async readPrDetailsFromLocal(): Promise<PrDetailsMap> {
+    if (!canReadLocalStorage()) return {};
+    const result = await runWithTransientStorageRetry(() =>
+      this.storage.local.get(STORAGE_KEY_PR_DETAILS)
+    );
+    return (result[STORAGE_KEY_PR_DETAILS] as PrDetailsMap | undefined) ?? {};
   }
 
   /** User-initiated refresh: background fetches GitHub, updates storage, reschedules the alarm. */

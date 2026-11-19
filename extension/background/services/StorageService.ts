@@ -19,9 +19,11 @@ import {
   STORAGE_KEY_MERGED_PRS,
   STORAGE_KEY_ONBOARDING_REAUTH_GATE_PENDING,
   STORAGE_KEY_PARSER_BREAKAGE,
+  STORAGE_KEY_PR_DETAILS,
   STORAGE_KEY_PR_LIST_TRUST,
   STORAGE_KEY_ROUTE_HINT,
   STORAGE_KEY_SETTINGS,
+  STORAGE_KEY_TODAY_PRS,
   STORAGE_KEY_USER_DATA,
 } from '@common/constants';
 import { isTransientExtensionStorageError } from '@common/errors';
@@ -301,6 +303,8 @@ export class StorageService implements IStorageService {
         STORAGE_KEY_ASSIGNED_PRS,
         STORAGE_KEY_MERGED_PRS,
         STORAGE_KEY_AUTHORED_PRS,
+        STORAGE_KEY_TODAY_PRS,
+        STORAGE_KEY_PR_DETAILS,
         STORAGE_KEY_LAST_FETCH,
         STORAGE_KEY_ROUTE_HINT,
         STORAGE_KEY_GITHUB_OUTAGE,
@@ -441,7 +445,8 @@ export class StorageService implements IStorageService {
     return (
       key === STORAGE_KEY_ASSIGNED_PRS ||
       key === STORAGE_KEY_MERGED_PRS ||
-      key === STORAGE_KEY_AUTHORED_PRS
+      key === STORAGE_KEY_AUTHORED_PRS ||
+      key === STORAGE_KEY_TODAY_PRS
     );
   }
 

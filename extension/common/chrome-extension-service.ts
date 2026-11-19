@@ -13,6 +13,8 @@ import { SettingsClient } from './chrome/clients/settings-client';
 import { SoundPreviewClient } from './chrome/clients/sound-preview-client';
 import { DevTestClient } from './chrome/clients/dev-test-client';
 import { RuntimeMessageClient } from './chrome/clients/runtime-message-client';
+import { GitHubTokenClient } from './chrome/clients/github-token-client';
+import { PrActionClient } from './chrome/clients/pr-action-client';
 
 /**
  * Composition root for the cross-context Chrome-extension API surface. Popup, MV3 service worker,
@@ -58,6 +60,8 @@ export class ChromeExtensionService {
 
   readonly prs = new PrClient(this.storage, this.bg);
   readonly settings = new SettingsClient(this.storage, this.bg);
+  readonly githubToken = new GitHubTokenClient(this.bg);
+  readonly prActions = new PrActionClient(this.bg);
   readonly sound = new SoundPreviewClient(this.bg);
   readonly devTest = new DevTestClient(this.bg);
   readonly messages = new RuntimeMessageClient(this.runtime);

@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import type { PullRequest } from '@common/types';
+import { useInboxPartition, useInboxPreferences } from '@src/hooks/inbox-preferences';
 import { PRItem } from '../pr-item';
+import { HiddenPrSection } from './hidden-pr-section';
 import { PRListEmptyState } from './pr-list-empty-state';
 
 interface AssignedListProps {
@@ -18,7 +20,6 @@ export const AssignedList = ({
   onViewIds,
   onEntranceSeenOpen,
 }: AssignedListProps) => {
-  // Mark new PRs as viewed when this component unmounts (user switches tabs)
   useEffect(() => {
     return () => {
       const idsToMark = prs.filter((pr) => newPrIds.has(pr.id)).map((pr) => pr.id);
@@ -26,14 +27,25 @@ export const AssignedList = ({
     };
   }, [prs, newPrIds, onViewIds]);
 
-  const pendingPRs = prs.filter((pr) => pr.reviewStatus === 'pending');
-  const reviewedPRs = prs.filter((pr) => pr.reviewStatus === 'reviewed');
+  const { ready, orgFilter, showHidden, visible, hidden } = useInboxPartition(prs);
+  const { hide, unhide } = useInboxPreferences();
 
-  if (prs.length === 0) {
+  const pendingPRs = visible.filter((pr) => pr.reviewStatus === 'pending');
+  const reviewedPRs = visible.filter((pr) => pr.reviewStatus === 'reviewed');
+
+  if (!ready) {
+    return <div className="h-full" />;
+  }
+
+  if (visible.length === 0 && hidden.length === 0) {
     return (
       <PRListEmptyState
-        message="No PRs to review"
-        subMessage="PRs requesting your review will appear here"
+        message={orgFilter ? `No pull requests in ${orgFilter}` : 'No PRs to review'}
+        subMessage={
+          orgFilter
+            ? 'PRs from other organizations stay hidden'
+            : 'PRs requesting your review will appear here'
+        }
         hasEverLoaded={hasEverLoaded}
       />
     );
@@ -41,33 +53,41 @@ export const AssignedList = ({
 
   return (
     <div className="h-full overflow-y-auto custom-scrollbar">
-      {pendingPRs.length > 0 && (
-        <>
-          {pendingPRs.map((pr, i) => (
-            <PRItem
-              key={pr.id}
-              pr={pr}
-              isNew={newPrIds.has(pr.id)}
-              isFirst={i === 0}
-              isReviewed={pr.reviewStatus === 'reviewed'}
-              onPrLinkActivated={onEntranceSeenOpen}
-            />
-          ))}
-        </>
+      {visible.length === 0 && (
+        <p className="px-5 py-4 text-sm italic text-base-content/50">Nothing to show</p>
       )}
-      {reviewedPRs.length > 0 && (
-        <>
-          {reviewedPRs.map((pr, i) => (
-            <PRItem
-              key={pr.id}
-              pr={pr}
-              isNew={newPrIds.has(pr.id)}
-              isFirst={pendingPRs.length === 0 && i === 0}
-              isReviewed={pr.reviewStatus === 'reviewed'}
-              onPrLinkActivated={onEntranceSeenOpen}
-            />
-          ))}
-        </>
+      {pendingPRs.map((pr, i) => (
+        <PRItem
+          key={pr.id}
+          pr={pr}
+          isNew={newPrIds.has(pr.id)}
+          isFirst={i === 0}
+          isReviewed={false}
+          canApprove
+          onToggleHidden={hide}
+          onPrLinkActivated={onEntranceSeenOpen}
+        />
+      ))}
+      {reviewedPRs.map((pr, i) => (
+        <PRItem
+          key={pr.id}
+          pr={pr}
+          isNew={newPrIds.has(pr.id)}
+          isFirst={pendingPRs.length === 0 && i === 0}
+          isReviewed
+          canApprove
+          onToggleHidden={hide}
+          onPrLinkActivated={onEntranceSeenOpen}
+        />
+      ))}
+      {showHidden && (
+        <HiddenPrSection
+          prs={hidden}
+          newPrIds={newPrIds}
+          canApprove
+          onShow={unhide}
+          onPrLinkActivated={onEntranceSeenOpen}
+        />
       )}
     </div>
   );

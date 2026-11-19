@@ -10,6 +10,7 @@ import type {
   STORAGE_KEY_USER_DATA,
   STORAGE_KEY_MERGED_PRS,
   STORAGE_KEY_AUTHORED_PRS,
+  STORAGE_KEY_TODAY_PRS,
 } from './constants';
 import type { BroadcastAction, RequestRuntimeAction, RuntimeAction } from './runtime-actions';
 
@@ -61,6 +62,69 @@ export interface AuthoredSettings {
   sound: NotificationSound;
 }
 
+/** How far back the inbox shows pull requests by `createdAt`. */
+export type InboxDateRange = 'all' | '7d' | '30d' | '1y';
+
+/**
+ * Which pull requests the inbox is allowed to show.
+ * `orgFilter` empty (or "all") means every GitHub organization.
+ */
+export interface InboxSettings {
+  orgFilter: string;
+  dateRange: InboxDateRange;
+  /** When false (default), hidden PRs are fully removed from the UI. */
+  showHidden: boolean;
+}
+
+export type CheckRollupState = 'SUCCESS' | 'FAILURE' | 'PENDING' | 'ERROR' | 'EXPECTED' | null;
+
+export type MergeStateStatus =
+  | 'CLEAN'
+  | 'UNSTABLE'
+  | 'HAS_HOOKS'
+  | 'BEHIND'
+  | 'BLOCKED'
+  | 'DIRTY'
+  | 'DRAFT'
+  | 'UNKNOWN'
+  | string;
+
+export type MergeMethod = 'MERGE' | 'SQUASH' | 'REBASE';
+
+/** GitHub issue/PR label as shown on a list row. */
+export interface PrLabel {
+  name: string;
+  /** GitHub label color hex without `#` (e.g. `b60205`). */
+  color?: string;
+}
+
+/** API-enriched details for one open PR (checks + merge affordances). */
+export interface PrDetails {
+  url: string;
+  nodeId: string;
+  state: 'OPEN' | 'CLOSED' | 'MERGED' | string;
+  isDraft: boolean;
+  checkState: CheckRollupState;
+  mergeStateStatus: MergeStateStatus;
+  mergeable: boolean | null;
+  viewerCanMergeAsAdmin: boolean;
+  viewerCanUpdateBranch: boolean;
+  viewerCanEnableAutoMerge: boolean;
+  viewerCanDisableAutoMerge: boolean;
+  autoMergeEnabled: boolean;
+  viewerDefaultMergeMethod: MergeMethod | null;
+  mergeCommitAllowed: boolean;
+  squashMergeAllowed: boolean;
+  rebaseMergeAllowed: boolean;
+  viewerCanClose: boolean;
+  labels: PrLabel[];
+  updatedAt?: string;
+}
+
+export type PrDetailsMap = Record<string, PrDetails>;
+
+export type TodayReason = 'mine' | 'review' | 'mentioned';
+
 /** Person shown on a PR row (assignees from AvatarStack when present; else opener heuristics). */
 export interface PullRequestAuthor {
   login: string;
@@ -93,6 +157,12 @@ export interface PullRequest {
   type: 'draft' | 'open' | 'merged';
   reviewStatus?: 'pending' | 'reviewed';
   authorReviewStatus?: 'approved' | 'changes_requested' | 'pending' | 'commented' | 'draft';
+  /** Present on Today-tab rows only. */
+  todayReason?: TodayReason;
+}
+
+export interface TodayPullRequest extends PullRequest {
+  todayReason: TodayReason;
 }
 
 // Represents the structure of stored PR data
@@ -120,12 +190,14 @@ export interface StorageItems {
 export type StorageKeyPRs =
   | typeof STORAGE_KEY_ASSIGNED_PRS
   | typeof STORAGE_KEY_MERGED_PRS
-  | typeof STORAGE_KEY_AUTHORED_PRS;
+  | typeof STORAGE_KEY_AUTHORED_PRS
+  | typeof STORAGE_KEY_TODAY_PRS;
 
 export interface StorageKeyMap {
   [STORAGE_KEY_ASSIGNED_PRS]: StoredPRs;
   [STORAGE_KEY_MERGED_PRS]: StoredPRs;
   [STORAGE_KEY_AUTHORED_PRS]: StoredPRs;
+  [STORAGE_KEY_TODAY_PRS]: StoredPRs;
   [STORAGE_KEY_LAST_FETCH]: number;
   [STORAGE_KEY_SETTINGS]: ExtensionSettings;
   [STORAGE_KEY_GITHUB_VIEWER_IDENTITY]: GitHubViewerIdentity;
@@ -148,6 +220,8 @@ export interface ExtensionSettings {
   merged: MergedSettings;
   /** Authored tab list/display settings only — desktop notifications are not implemented for authored PRs. */
   authored: AuthoredSettings;
+  /** Organization filter. Empty orgFilter shows every organization. */
+  inbox: InboxSettings;
 }
 
 // User-specific data (example)
