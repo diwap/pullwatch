@@ -26,6 +26,7 @@ import type {
   MergeMethod,
   PrDetails,
   PrDetailsMap,
+  PrReviewDecision,
   PullRequest,
   TodayPullRequest,
   TodayReason,
@@ -364,6 +365,7 @@ export class GitHubApiService implements IGitHubApiService {
             updatedAt
             mergeStateStatus
             mergeable
+            reviewDecision
             viewerCanMergeAsAdmin
             viewerCanUpdateBranch
             viewerCanEnableAutoMerge
@@ -496,6 +498,14 @@ function mapResourceToDetails(
   const mergeable =
     mergeableRaw === 'MERGEABLE' ? true : mergeableRaw === 'CONFLICTING' ? false : null;
 
+  const reviewDecisionRaw = n.reviewDecision;
+  const reviewDecision: PrReviewDecision =
+    reviewDecisionRaw === 'APPROVED' ||
+    reviewDecisionRaw === 'CHANGES_REQUESTED' ||
+    reviewDecisionRaw === 'REVIEW_REQUIRED'
+      ? reviewDecisionRaw
+      : null;
+
   return {
     url,
     nodeId: n.id,
@@ -504,6 +514,7 @@ function mapResourceToDetails(
     checkState: (rollup as CheckRollupState) ?? null,
     mergeStateStatus: String(n.mergeStateStatus || 'UNKNOWN'),
     mergeable,
+    reviewDecision,
     viewerCanMergeAsAdmin: Boolean(n.viewerCanMergeAsAdmin),
     viewerCanUpdateBranch: Boolean(n.viewerCanUpdateBranch),
     viewerCanEnableAutoMerge: Boolean(n.viewerCanEnableAutoMerge),

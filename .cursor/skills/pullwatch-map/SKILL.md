@@ -30,7 +30,7 @@ Store full scraped lists. Filter only at display, badge, and notification time (
 | Today list | `src/components/lists/today-list.tsx`, `src/hooks/use-today-prs.ts` |
 | To Review / Authored / Merged | `src/components/lists/assigned-list.tsx`, `authored-list.tsx`, `merged-list.tsx` |
 | Hidden section | `src/components/lists/hidden-pr-section.tsx` (only when `inbox.showHidden`) |
-| PR row, checks, labels, ⋯ menu | `src/components/pr-item/pr-item-shell.tsx`, `components/pr-item-labels.tsx`, `components/pr-row-menu.tsx`, `components/check-status-icon.tsx` |
+| PR row, checks, reviewDecision, labels, ⋯ menu | `src/components/pr-item/pr-item-shell.tsx`, `components/pr-item-labels.tsx`, `components/pr-row-menu.tsx`, `components/check-status-icon.tsx` |
 | Menu visibility rules | `extension/common/pr-menu-actions.ts` (`getPrMenuActions`) |
 | Org / date / showHidden / token state | `src/hooks/inbox-preferences.tsx` |
 | Settings page | `src/components/settings/shell/settings-page.tsx` |

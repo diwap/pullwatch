@@ -10,6 +10,7 @@ const details = (partial: Partial<PrDetails> = {}): PrDetails => ({
   checkState: 'SUCCESS',
   mergeStateStatus: 'CLEAN',
   mergeable: true,
+  reviewDecision: 'APPROVED',
   viewerCanMergeAsAdmin: false,
   viewerCanUpdateBranch: false,
   viewerCanEnableAutoMerge: false,

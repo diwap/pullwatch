@@ -61,6 +61,7 @@ export function PrItemShell({
           showAuthorStatus={showAuthorStatus}
           authorReviewStatus={pr.authorReviewStatus}
           checkState={details?.checkState}
+          reviewDecision={details?.reviewDecision}
           todayReason={pr.todayReason}
           onTruncatedTitleStackLiftChange={handleTitleTooltipStackLiftChange}
         />

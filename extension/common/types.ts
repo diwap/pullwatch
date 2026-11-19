@@ -91,6 +91,9 @@ export type MergeStateStatus =
 
 export type MergeMethod = 'MERGE' | 'SQUASH' | 'REBASE';
 
+/** GraphQL `PullRequest.reviewDecision` (null when no review requirement applies). */
+export type PrReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
+
 /** GitHub issue/PR label as shown on a list row. */
 export interface PrLabel {
   name: string;
@@ -107,6 +110,8 @@ export interface PrDetails {
   checkState: CheckRollupState;
   mergeStateStatus: MergeStateStatus;
   mergeable: boolean | null;
+  /** Branch-protection review state; independent of CI check rollup. */
+  reviewDecision: PrReviewDecision;
   viewerCanMergeAsAdmin: boolean;
   viewerCanUpdateBranch: boolean;
   viewerCanEnableAutoMerge: boolean;
