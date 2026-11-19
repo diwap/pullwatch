@@ -8,6 +8,14 @@ export const STORAGE_KEY_LAST_FETCH = 'last_fetch_time';
 /** True while the background is running an alarm or manual GitHub fetch cycle (popup reads via storage.onChanged). */
 export const STORAGE_KEY_PR_FETCH_IN_PROGRESS = 'pr_fetch_in_progress';
 export const STORAGE_KEY_SETTINGS = 'settings'; // As per requirements
+/** Pull request ids the user hid from the main inbox. Stored locally, not synced. */
+export const STORAGE_KEY_HIDDEN_PR_IDS = 'hidden_pr_ids';
+/** GitHub personal access token for API actions / status / Today. Local only. */
+export const STORAGE_KEY_GITHUB_API_TOKEN = 'github_api_token';
+/** Map of PR url → API details (checks, merge state). Local only. */
+export const STORAGE_KEY_PR_DETAILS = 'pr_details';
+/** Today-tab PR list envelope. Local only. */
+export const STORAGE_KEY_TODAY_PRS = 'github_today_prs';
 export const STORAGE_KEY_USER_DATA = 'user_data'; // Example, can be expanded
 export const STORAGE_KEY_PATTERN_REGISTRY = 'parser_pattern_registry';
 export const STORAGE_KEY_PARSER_BREAKAGE = 'parser_breakage';

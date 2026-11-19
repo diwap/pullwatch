@@ -25,7 +25,9 @@ import {
   EVENT_OFFSCREEN_READY,
   EVENT_PLAY_SOUND,
   EVENT_SETTINGS_UPDATED,
+  GITHUB_TOKEN_ACTION,
   isBroadcastAction,
+  PR_ACTION,
   PR_DATA_ACTION,
   PREVIEW_SOUND_ACTION,
   SETTINGS_ACTION,
@@ -109,7 +111,28 @@ export class EventService implements IEventService {
       (m, r) => this.handleSettingsActions(m, r),
       SETTINGS_ACTION.saveSettings,
       SETTINGS_ACTION.getSettings,
-      SETTINGS_ACTION.testSettingsNotification
+      SETTINGS_ACTION.testSettingsNotification,
+      SETTINGS_ACTION.syncBadge
+    );
+    registerDispatchGroup(
+      dispatchTable,
+      (m, r) => this.handleGithubTokenActions(m, r),
+      GITHUB_TOKEN_ACTION.getTokenStatus,
+      GITHUB_TOKEN_ACTION.saveToken,
+      GITHUB_TOKEN_ACTION.clearToken,
+      GITHUB_TOKEN_ACTION.testToken
+    );
+    registerDispatchGroup(
+      dispatchTable,
+      (m, r) => this.handlePrActionMessages(m, r),
+      PR_ACTION.approve,
+      PR_ACTION.updateBranch,
+      PR_ACTION.merge,
+      PR_ACTION.bypassMerge,
+      PR_ACTION.enableAutoMerge,
+      PR_ACTION.disableAutoMerge,
+      PR_ACTION.close,
+      PR_ACTION.refreshDetails
     );
     registerDispatchGroup(
       dispatchTable,
@@ -469,8 +492,136 @@ export class EventService implements IEventService {
         } catch (err) {
           this.debugService.error('[EventService] persistResolvedViewerIdentity failed:', err);
         }
+        await this.enrichWithGithubApi();
         await storageService.set(STORAGE_KEY_PR_FETCH_IN_PROGRESS, false);
       }
+    }
+  }
+
+  /**
+   * Today list (local seed always; API search when token present) + optional PR details.
+   * Runs after every list wave so Today stays filled even when the token cannot search a private org.
+   */
+  private async enrichWithGithubApi(): Promise<void> {
+    // Keep getService inside try — tests (and rare boot races) may lack the service;
+    // a throw here would escape `withPrUiFetchIndicator`'s finally and mask auth errors.
+    try {
+      const api = this.serviceContainer.getService('gitHubApiService');
+      await api.fetchTodayPrs();
+      if (await api.hasToken()) {
+        await api.syncPrDetailsFromStoredLists();
+      }
+    } catch (error) {
+      this.debugService.warn('[EventService] GitHub API enrichment failed:', error);
+    }
+    try {
+      // Today feeds the toolbar badge; refresh after the list is rewritten.
+      await this.serviceContainer.getService('prService').syncBadgeFromStorage();
+    } catch (error) {
+      this.debugService.warn('[EventService] Badge sync after Today enrich failed:', error);
+    }
+  }
+
+  private async handleGithubTokenActions(
+    message: RuntimeMessage,
+    sendResponse: (response: MessageResponse) => void
+  ): Promise<void> {
+    const api = this.serviceContainer.getService('gitHubApiService');
+    try {
+      if (message.action === GITHUB_TOKEN_ACTION.getTokenStatus) {
+        sendResponse({ success: true, data: await api.getTokenStatus() });
+        return;
+      }
+      if (message.action === GITHUB_TOKEN_ACTION.clearToken) {
+        await api.clearToken();
+        sendResponse({ success: true });
+        return;
+      }
+      if (message.action === GITHUB_TOKEN_ACTION.saveToken) {
+        const token = (message as RuntimeRequestMessage<{ token?: string }>).payload?.token;
+        if (!token?.trim()) {
+          sendResponse({ success: false, error: 'Token is empty' });
+          return;
+        }
+        const status = await api.saveToken(token);
+        await this.enrichWithGithubApi();
+        sendResponse({ success: true, data: status });
+        return;
+      }
+      if (message.action === GITHUB_TOKEN_ACTION.testToken) {
+        const token = (message as RuntimeRequestMessage<{ token?: string }>).payload?.token;
+        sendResponse({ success: true, data: await api.testToken(token) });
+        return;
+      }
+    } catch (error) {
+      sendResponse({
+        success: false,
+        error: error instanceof Error ? error.message : 'Token action failed',
+      });
+    }
+  }
+
+  private async handlePrActionMessages(
+    message: RuntimeMessage,
+    sendResponse: (response: MessageResponse) => void
+  ): Promise<void> {
+    const api = this.serviceContainer.getService('gitHubApiService');
+    const url = (message as RuntimeRequestMessage<{ url?: string }>).payload?.url;
+    if (!url) {
+      sendResponse({ success: false, error: 'Missing pull request URL' });
+      return;
+    }
+
+    try {
+      switch (message.action) {
+        case PR_ACTION.approve:
+          await api.approve(url);
+          break;
+        case PR_ACTION.updateBranch:
+          await api.updateBranch(url);
+          break;
+        case PR_ACTION.merge:
+          await api.merge(url);
+          break;
+        case PR_ACTION.bypassMerge:
+          await api.merge(url, { bypass: true });
+          break;
+        case PR_ACTION.enableAutoMerge:
+          await api.enableAutoMerge(url);
+          break;
+        case PR_ACTION.disableAutoMerge:
+          await api.disableAutoMerge(url);
+          break;
+        case PR_ACTION.close:
+          await api.close(url);
+          break;
+        case PR_ACTION.refreshDetails:
+          break;
+        default:
+          sendResponse({ success: false, error: 'Unknown PR action' });
+          return;
+      }
+
+      const details = await api.refreshPrDetail(url);
+      if (message.action !== PR_ACTION.refreshDetails) {
+        try {
+          const prService = this.serviceContainer.getService('prService');
+          await this.withPrUiFetchIndicator(async () => {
+            prService.beginPrListHealthWave();
+            await prService.fetchAndUpdateAssignedPRs(true, true);
+            await prService.updateMergedPRs(true, true);
+            await prService.updateAuthoredPRs(true, true);
+          });
+        } catch (refreshError) {
+          this.debugService.warn('[EventService] Post-action list refresh failed:', refreshError);
+        }
+      }
+      sendResponse({ success: true, data: details });
+    } catch (error) {
+      sendResponse({
+        success: false,
+        error: error instanceof Error ? error.message : 'PR action failed',
+      });
     }
   }
 
@@ -529,6 +680,12 @@ export class EventService implements IEventService {
 
       const storageService = this.serviceContainer.getService('storageService');
 
+      if (message.action === SETTINGS_ACTION.syncBadge) {
+        await this.serviceContainer.getService('prService').syncBadgeFromStorage();
+        sendResponse({ success: true });
+        return;
+      }
+
       if (this.isMessageAction<Partial<ExtensionSettings>>(message, SETTINGS_ACTION.saveSettings)) {
         if (message.payload) {
           await storageService.setExtensionSettings(message.payload);
@@ -536,6 +693,15 @@ export class EventService implements IEventService {
 
           // Notify all open popups that settings have changed
           this.broadcastSettingsUpdate(settings);
+
+          try {
+            await this.serviceContainer.getService('prService').syncBadgeFromStorage();
+          } catch (badgeError) {
+            this.debugService.log(
+              '[EventService] Badge resync after settings save failed:',
+              badgeError
+            );
+          }
 
           sendResponse({ success: true, data: settings });
         } else {

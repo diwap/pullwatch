@@ -12,7 +12,7 @@ import type { NotificationCreateOptions } from '@common/chrome-extension-service
  */
 export type PrNotifyVisualResult = {
   fired: boolean;
-  reason?: 'disabled' | 'all_drafts_filtered' | 'empty_input';
+  reason?: 'disabled' | 'all_drafts_filtered' | 'empty_input' | 'inbox_filtered';
 };
 
 /**

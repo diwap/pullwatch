@@ -1,3 +1,4 @@
+import { normalizedDateRange, normalizedOrgFilter } from './pr-visibility';
 import type { ExtensionSettings } from './types';
 
 /**
@@ -17,6 +18,11 @@ export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   authored: {
     notificationsEnabled: false,
     sound: 'ping',
+  },
+  inbox: {
+    orgFilter: '',
+    dateRange: 'all',
+    showHidden: false,
   },
 };
 
@@ -43,6 +49,18 @@ export function ensureCompleteSettings(
     authored: {
       ...DEFAULT_EXTENSION_SETTINGS.authored,
       ...base.authored,
+    },
+    inbox: {
+      orgFilter: normalizedOrgFilter(
+        base.inbox?.orgFilter ?? DEFAULT_EXTENSION_SETTINGS.inbox.orgFilter
+      ),
+      dateRange: normalizedDateRange(
+        base.inbox?.dateRange ?? DEFAULT_EXTENSION_SETTINGS.inbox.dateRange
+      ),
+      showHidden:
+        typeof base.inbox?.showHidden === 'boolean'
+          ? base.inbox.showHidden
+          : DEFAULT_EXTENSION_SETTINGS.inbox.showHidden,
     },
   };
 }

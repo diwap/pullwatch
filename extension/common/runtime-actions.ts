@@ -15,6 +15,26 @@ export const SETTINGS_ACTION = {
   saveSettings: 'saveSettings',
   getSettings: 'getSettings',
   testSettingsNotification: 'testSettingsNotification',
+  /** Recompute the toolbar badge from stored PRs plus inbox filters. */
+  syncBadge: 'syncBadge',
+} as const;
+
+export const GITHUB_TOKEN_ACTION = {
+  getTokenStatus: 'getTokenStatus',
+  saveToken: 'saveToken',
+  clearToken: 'clearToken',
+  testToken: 'testToken',
+} as const;
+
+export const PR_ACTION = {
+  approve: 'prAction:approve',
+  updateBranch: 'prAction:updateBranch',
+  merge: 'prAction:merge',
+  bypassMerge: 'prAction:bypassMerge',
+  enableAutoMerge: 'prAction:enableAutoMerge',
+  disableAutoMerge: 'prAction:disableAutoMerge',
+  close: 'prAction:close',
+  refreshDetails: 'prAction:refreshDetails',
 } as const;
 
 export const OFFSCREEN_ACTION = {
@@ -58,6 +78,8 @@ export const EVENT_SETTINGS_UPDATED = BROADCAST_ACTION.settingsUpdated;
 export const RUNTIME_ACTION = {
   ...PR_DATA_ACTION,
   ...SETTINGS_ACTION,
+  ...GITHUB_TOKEN_ACTION,
+  ...PR_ACTION,
   ...OFFSCREEN_ACTION,
   ...PREVIEW_SOUND_ACTION,
   ...DEV_TEST_ACTION,

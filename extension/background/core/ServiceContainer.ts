@@ -7,6 +7,7 @@ import { NotificationService } from '../services/NotificationService';
 import { BadgeService } from '../services/BadgeService';
 import { AvatarService } from '../services/AvatarService';
 import { GitHubService } from '../services/GitHubService';
+import { GitHubApiService } from '../services/GitHubApiService';
 import { SoundService } from '../services/SoundService';
 import { EventService } from '../services/EventService';
 import { DevTestService } from '../services/DevTestService';
@@ -79,6 +80,10 @@ export class ServiceContainer {
         this.getService('avatarService'),
         this.getService('patternRegistryService')
       )
+    );
+    this.registerService(
+      'gitHubApiService',
+      new GitHubApiService(this.getService('debugService'), this.getService('storageService'))
     );
     this.registerService('rateLimitService', new RateLimitService(this.getService('debugService')));
 

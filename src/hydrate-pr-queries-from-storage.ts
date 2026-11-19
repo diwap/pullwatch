@@ -3,6 +3,7 @@ import {
   STORAGE_KEY_ASSIGNED_PRS,
   STORAGE_KEY_AUTHORED_PRS,
   STORAGE_KEY_MERGED_PRS,
+  STORAGE_KEY_TODAY_PRS,
 } from '@common/constants';
 import type { StoredPRs } from '@common/types';
 import { runWithTransientStorageRetry } from '@common/transient-storage-retry';
@@ -22,7 +23,12 @@ export const hydratePrQueriesFromStorage = async (
     return;
   }
 
-  const keys = [STORAGE_KEY_ASSIGNED_PRS, STORAGE_KEY_MERGED_PRS, STORAGE_KEY_AUTHORED_PRS] as const;
+  const keys = [
+    STORAGE_KEY_TODAY_PRS,
+    STORAGE_KEY_ASSIGNED_PRS,
+    STORAGE_KEY_MERGED_PRS,
+    STORAGE_KEY_AUTHORED_PRS,
+  ] as const;
 
   let result: Record<string, unknown>;
   try {
@@ -34,10 +40,12 @@ export const hydratePrQueriesFromStorage = async (
     return;
   }
 
+  const today = (result[STORAGE_KEY_TODAY_PRS] as StoredPRs | undefined)?.prs ?? [];
   const assigned = (result[STORAGE_KEY_ASSIGNED_PRS] as StoredPRs | undefined)?.prs ?? [];
   const merged = (result[STORAGE_KEY_MERGED_PRS] as StoredPRs | undefined)?.prs ?? [];
   const authored = (result[STORAGE_KEY_AUTHORED_PRS] as StoredPRs | undefined)?.prs ?? [];
 
+  queryClient.setQueryData(queryKeys.todayPrs, today);
   queryClient.setQueryData(queryKeys.assignedPrs, assigned);
   queryClient.setQueryData(queryKeys.mergedPrs, merged);
   queryClient.setQueryData(queryKeys.authoredPrs, authored);

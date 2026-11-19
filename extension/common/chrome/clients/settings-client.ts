@@ -50,6 +50,11 @@ export class SettingsClient {
     return this.bg.dispatch(SETTINGS_ACTION.testSettingsNotification, { category });
   }
 
+  /** Asks the service worker to repaint the toolbar badge from the current inbox filters. */
+  syncBadge(): Promise<void> {
+    return this.bg.dispatch(SETTINGS_ACTION.syncBadge);
+  }
+
   /**
    * Subscribes to `chrome.storage.onChanged` for the settings key (sync area). Any sync writer —
    * this extension on save, cross-device sync — triggers the same path without a runtime broadcast.

@@ -4,6 +4,7 @@ import {
   STORAGE_KEY_ASSIGNED_PRS,
   STORAGE_KEY_AUTHORED_PRS,
   STORAGE_KEY_MERGED_PRS,
+  STORAGE_KEY_TODAY_PRS,
 } from '@common/constants';
 import type { PullRequest, StoredPRs } from '@common/types';
 import { queryKeys } from '@src/constants/query-keys';
@@ -22,6 +23,7 @@ import {
  * broadcast `runtime.sendMessage` (the periodic alarm path does not).
  */
 const PR_LIST_STORAGE_SYNC_ROWS = [
+  { storageKey: STORAGE_KEY_TODAY_PRS, queryKey: queryKeys.todayPrs },
   { storageKey: STORAGE_KEY_ASSIGNED_PRS, queryKey: queryKeys.assignedPrs },
   { storageKey: STORAGE_KEY_MERGED_PRS, queryKey: queryKeys.mergedPrs },
   { storageKey: STORAGE_KEY_AUTHORED_PRS, queryKey: queryKeys.authoredPrs },

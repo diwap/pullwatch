@@ -3,6 +3,7 @@
  * This ensures consistent cache key management across all hooks.
  */
 export const queryKeys = {
+  todayPrs: ['todayPrs'] as const,
   assignedPrs: ['assignedPrs'] as const,
   mergedPrs: ['mergedPrs'] as const,
   authoredPrs: ['authoredPrs'] as const,

@@ -1,7 +1,13 @@
 import clsx from 'clsx';
 import { XIcon, CheckIcon, ClockIcon, CommentIcon, PullRequestDraftIcon } from './icons';
 
-type ReviewStatus = 'changes_requested' | 'approved' | 'pending' | 'commented' | 'draft';
+type ReviewStatus =
+  | 'changes_requested'
+  | 'approved'
+  | 'pending'
+  | 'commented'
+  | 'draft'
+  | 'review_required';
 
 interface StatusConfig {
   icon: React.ComponentType<{ className?: string; width?: number; height?: number }>;
@@ -23,6 +29,11 @@ const STATUS_CONFIG: Record<ReviewStatus, StatusConfig> = {
   pending: {
     icon: ClockIcon,
     label: 'Pending',
+    classes: 'bg-warning/15 text-warning contrast-80',
+  },
+  review_required: {
+    icon: ClockIcon,
+    label: 'Review required',
     classes: 'bg-warning/15 text-warning contrast-80',
   },
   commented: {

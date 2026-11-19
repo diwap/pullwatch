@@ -5,6 +5,7 @@ import type { IDebugService } from '../interfaces/IDebugService';
 import type { IDevTestService } from '../interfaces/IDevTestService';
 import type { IEventService } from '../interfaces/IEventService';
 import type { IGitHubService } from '../interfaces/IGitHubService';
+import type { IGitHubApiService } from '../interfaces/IGitHubApiService';
 import type { INotificationService } from '../interfaces/INotificationService';
 import type { IPermissionService } from '../interfaces/IPermissionService';
 import type { IPRService } from '../interfaces/IPRService';
@@ -35,6 +36,7 @@ export interface ServiceMap {
   gitHubStatusClient: IGitHubStatusClient;
   patternRegistryService: IPatternRegistryService;
   gitHubService: IGitHubService;
+  gitHubApiService: IGitHubApiService;
   rateLimitService: IRateLimitService;
   notificationService: INotificationService;
   prService: IPRService;

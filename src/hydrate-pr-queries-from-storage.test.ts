@@ -4,6 +4,7 @@ import {
   STORAGE_KEY_ASSIGNED_PRS,
   STORAGE_KEY_AUTHORED_PRS,
   STORAGE_KEY_MERGED_PRS,
+  STORAGE_KEY_TODAY_PRS,
 } from '@common/constants';
 import type { PullRequest, StoredPRs } from '@common/types';
 import { queryKeys } from '@src/constants/query-keys';
@@ -83,10 +84,12 @@ describe('Popup cold start from persisted lists', () => {
     await hydratePrQueriesFromStorage(queryClient);
 
     expect(storageMocks.storageGet).toHaveBeenCalledWith([
+      STORAGE_KEY_TODAY_PRS,
       STORAGE_KEY_ASSIGNED_PRS,
       STORAGE_KEY_MERGED_PRS,
       STORAGE_KEY_AUTHORED_PRS,
     ]);
+    expect(queryClient.getQueryData(queryKeys.todayPrs)).toEqual([]);
     expect(queryClient.getQueryData(queryKeys.assignedPrs)).toEqual(assignedPrs);
     expect(queryClient.getQueryData(queryKeys.mergedPrs)).toEqual(mergedPrs);
     expect(queryClient.getQueryData(queryKeys.authoredPrs)).toEqual(authoredPrs);

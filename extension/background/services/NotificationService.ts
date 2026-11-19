@@ -5,18 +5,20 @@ import type {
 import type { IDebugService } from '../interfaces/IDebugService';
 import type { IStorageService } from '../interfaces/IStorageService';
 import type { ISoundService } from '../interfaces/ISoundService';
-import type { PullRequest, NotificationSound } from '@common/types';
+import type { InboxDateRange, PullRequest, NotificationSound } from '@common/types';
 import {
   SETTINGS_NOTIFICATION_TEST_COOLDOWN_MS,
   SETTINGS_PREVIEW_AFTER_CLEAR_MS,
   SETTINGS_TEST_ERROR_CHROME_DENIED,
   SETTINGS_TEST_ERROR_COOLDOWN,
   SETTINGS_TEST_ERROR_DISABLED,
+  STORAGE_KEY_HIDDEN_PR_IDS,
 } from '@common/constants';
 import { getChromeNotificationPermissionLevel } from '@common/notification-permission';
 import { SETTINGS_TEST_NOTIFICATION_COPY } from '@common/settings-test-notification-copy';
 import { isPlayableSound } from '@common/sound-config';
 import { effectiveAssignedNotifyOnDrafts } from '@common/effective-assigned-draft-notify';
+import { filterToVisibleInbox, hiddenPrIdSet } from '@common/pr-visibility';
 import { getNotificationIconUrl } from '@common/extension-assets';
 import {
   chromeExtensionService,
@@ -98,6 +100,28 @@ export class NotificationService implements INotificationService {
     }
   }
 
+  /**
+   * Drops PRs the inbox would not show: other organizations, and ids the user hid.
+   * A missing hidden-id read fails open (treat as nothing hidden) so a storage mock
+   * without `get` does not swallow notifications.
+   */
+  private async keepVisibleInboxPRs(
+    prs: PullRequest[],
+    inbox: { orgFilter?: string; dateRange?: InboxDateRange } | undefined
+  ): Promise<PullRequest[]> {
+    let hidden = new Set<string>();
+    try {
+      hidden = hiddenPrIdSet(await this.storageService.get(STORAGE_KEY_HIDDEN_PR_IDS));
+    } catch {
+      hidden = new Set();
+    }
+    return filterToVisibleInbox(prs, {
+      orgFilter: inbox?.orgFilter,
+      dateRange: inbox?.dateRange,
+      hiddenIds: hidden,
+    });
+  }
+
   async createAssignedPRVisuals(
     newPRs: PullRequest | PullRequest[]
   ): Promise<PrNotifyVisualResult> {
@@ -142,11 +166,19 @@ export class NotificationService implements INotificationService {
         return { fired: false, reason: 'all_drafts_filtered' };
       }
 
+      const visiblePRs = await this.keepVisibleInboxPRs(filteredPRs, settings.inbox);
+      if (visiblePRs.length === 0) {
+        this.debugService.log(
+          '[NotificationService] All new assigned PRs are outside the org filter or hidden, skipping notifications'
+        );
+        return { fired: false, reason: 'inbox_filtered' };
+      }
+
       this.debugService.log(
-        `[NotificationService] Showing assigned PR notifications for ${filteredPRs.length} PR(s)`
+        `[NotificationService] Showing assigned PR notifications for ${visiblePRs.length} PR(s)`
       );
 
-      await this.showPRNotificationsInternal(filteredPRs, 'assigned');
+      await this.showPRNotificationsInternal(visiblePRs, 'assigned');
       return { fired: true };
     } catch (error) {
       this.debugService.error('[NotificationService] Error creating assigned PR visuals:', error);
@@ -192,11 +224,19 @@ export class NotificationService implements INotificationService {
         return { fired: false, reason: 'empty_input' };
       }
 
+      const visiblePRs = await this.keepVisibleInboxPRs(prsArray, settings.inbox);
+      if (visiblePRs.length === 0) {
+        this.debugService.log(
+          '[NotificationService] All new merged PRs are outside the org filter or hidden, skipping notifications'
+        );
+        return { fired: false, reason: 'inbox_filtered' };
+      }
+
       this.debugService.log(
-        `[NotificationService] Showing merged PR notifications for ${prsArray.length} PR(s)`
+        `[NotificationService] Showing merged PR notifications for ${visiblePRs.length} PR(s)`
       );
 
-      await this.showPRNotificationsInternal(prsArray, 'merged');
+      await this.showPRNotificationsInternal(visiblePRs, 'merged');
       return { fired: true };
     } catch (error) {
       this.debugService.error('[NotificationService] Error creating merged PR visuals:', error);

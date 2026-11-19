@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import type { PullRequest } from '@common/types';
+import { useInboxPartition, useInboxPreferences } from '@src/hooks/inbox-preferences';
 import { PRItem } from '../pr-item';
+import { HiddenPrSection } from './hidden-pr-section';
 import { PRListEmptyState } from './pr-list-empty-state';
 
 interface MergedListProps {
@@ -18,7 +20,6 @@ export const MergedList = ({
   onViewIds,
   onEntranceSeenOpen,
 }: MergedListProps) => {
-  // Mark new PRs as viewed when this component unmounts (user switches tabs)
   useEffect(() => {
     return () => {
       const idsToMark = prs.filter((pr) => newPrIds.has(pr.id)).map((pr) => pr.id);
@@ -26,11 +27,20 @@ export const MergedList = ({
     };
   }, [prs, newPrIds, onViewIds]);
 
-  if (prs.length === 0) {
+  const { ready, orgFilter, showHidden, visible, hidden } = useInboxPartition(prs);
+  const { hide, unhide } = useInboxPreferences();
+
+  if (!ready) {
+    return <div className="h-full" />;
+  }
+
+  if (visible.length === 0 && hidden.length === 0) {
     return (
       <PRListEmptyState
-        message="No merged PRs"
-        subMessage="Merged PRs will appear here"
+        message={orgFilter ? `No pull requests in ${orgFilter}` : 'No merged PRs'}
+        subMessage={
+          orgFilter ? 'PRs from other organizations stay hidden' : 'Merged PRs will appear here'
+        }
         hasEverLoaded={hasEverLoaded}
       />
     );
@@ -38,18 +48,26 @@ export const MergedList = ({
 
   return (
     <div className="h-full overflow-y-auto custom-scrollbar">
-      {prs.length > 0 && (
-        <>
-          {prs.map((pr, i) => (
-            <PRItem
-              key={pr.id}
-              pr={pr}
-              isNew={newPrIds.has(pr.id)}
-              isFirst={i === 0}
-              onPrLinkActivated={onEntranceSeenOpen}
-            />
-          ))}
-        </>
+      {visible.length === 0 && (
+        <p className="px-5 py-4 text-sm italic text-base-content/50">Nothing to show</p>
+      )}
+      {visible.map((pr, i) => (
+        <PRItem
+          key={pr.id}
+          pr={pr}
+          isNew={newPrIds.has(pr.id)}
+          isFirst={i === 0}
+          onToggleHidden={hide}
+          onPrLinkActivated={onEntranceSeenOpen}
+        />
+      ))}
+      {showHidden && (
+        <HiddenPrSection
+          prs={hidden}
+          newPrIds={newPrIds}
+          onShow={unhide}
+          onPrLinkActivated={onEntranceSeenOpen}
+        />
       )}
     </div>
   );
