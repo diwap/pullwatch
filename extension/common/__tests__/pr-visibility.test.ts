@@ -105,6 +105,7 @@ describe('pr visibility', () => {
     const today = [
       pr({ id: 'today-1', repoName: 'AcmeCorp/web', reviewStatus: 'pending' }),
       pr({ id: 'shared', repoName: 'AcmeCorp/web', reviewStatus: 'pending' }),
+      pr({ id: 'merged-today', repoName: 'AcmeCorp/web', type: 'merged' }),
     ];
     const assigned = [
       pr({ id: 'shared', repoName: 'AcmeCorp/web', reviewStatus: 'pending' }),

@@ -11,6 +11,7 @@ import { LinkBehaviorField } from '../behavior/components/link-behavior-field';
 import { OrgFilterField } from '../inbox/org-filter-field';
 import { DateRangeField } from '../inbox/date-range-field';
 import { ShowHiddenField } from '../inbox/show-hidden-field';
+import { TeamReviewFilterField } from '../inbox/team-review-filter-field';
 import { GitHubTokenField } from '../github-token/github-token-field';
 import { ThemePicker } from '../appearance/components/theme-picker';
 import { PopupSizeField } from '../appearance/components/popup-size-field';
@@ -103,6 +104,7 @@ export const SettingsPage = ({ onClose }: SettingsPageProps) => {
             <OrgFilterField />
             <DateRangeField />
             <ShowHiddenField />
+            <TeamReviewFilterField />
           </SettingsSection>
 
           <SettingsSection title="GitHub token">

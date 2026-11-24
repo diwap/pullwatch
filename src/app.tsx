@@ -65,17 +65,22 @@ const AppShell = () => {
     [assignedView.visible]
   );
 
+  const todayOpenCount = useMemo(
+    () => todayView.visible.filter((pr) => pr.type !== 'merged').length,
+    [todayView.visible]
+  );
+
   const { assignedNewPrIds, mergedNewPrIds, markViewedIds, markViewedId } =
     usePrEntranceViewedState(assignedPRs, mergedPRs);
 
   const tabs: Tab[] = useMemo(
     () => [
-      { id: TAB_IDS.TODAY, label: 'Today', count: todayView.visible.length },
+      { id: TAB_IDS.TODAY, label: 'Today', count: todayOpenCount },
       { id: TAB_IDS.ASSIGNED, label: 'To Review', count: pendingPRCount },
       { id: TAB_IDS.AUTHORED, label: 'Authored', count: authoredView.visible.length },
       { id: TAB_IDS.MERGED, label: 'Merged', count: mergedView.visible.length },
     ],
-    [todayView.visible.length, pendingPRCount, authoredView.visible.length, mergedView.visible.length]
+    [todayOpenCount, pendingPRCount, authoredView.visible.length, mergedView.visible.length]
   );
 
   const handleTabChange = (tabId: string) => {

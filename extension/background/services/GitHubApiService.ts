@@ -15,8 +15,10 @@ import {
 import { parsePrUrl } from '@common/pr-url';
 import { resolveMergeMethod } from '@common/pr-menu-actions';
 import { normalizePrLabels } from '@common/pr-labels';
+import { isTeamReviewRequest, normalizeTeamSlug } from '@common/review-request-kind';
 import {
   localDateYmd,
+  pruneMergedFromToday,
   seedTodayFromScrapedLists,
   sortTodayPrs,
   upsertTodayPr,
@@ -104,9 +106,13 @@ export class GitHubApiService implements IGitHubApiService {
     const detail = map[url] ?? null;
     if (detail) {
       const existing = (await this.storageService.get<PrDetailsMap>(STORAGE_KEY_PR_DETAILS)) ?? {};
-      await this.storageService.set(STORAGE_KEY_PR_DETAILS, { ...existing, [url]: detail });
+      // Store under the popup's lookup URL (request URL), not only GraphQL's canonical url.
+      await this.storageService.set(STORAGE_KEY_PR_DETAILS, {
+        ...existing,
+        [url]: { ...detail, url },
+      });
     }
-    return detail;
+    return detail ? { ...detail, url } : null;
   }
 
   async syncPrDetailsFromStoredLists(): Promise<PrDetailsMap> {
@@ -119,17 +125,22 @@ export class GitHubApiService implements IGitHubApiService {
     ]);
 
     const urls = [
-      ...(assigned?.prs ?? []),
-      ...(authored?.prs ?? []),
-      ...(today?.prs ?? []),
-    ]
-      .filter((pr) => pr.type !== 'merged')
-      .map((pr) => pr.url);
+      ...new Set(
+        [...(assigned?.prs ?? []), ...(authored?.prs ?? []), ...(today?.prs ?? [])]
+          .filter((pr) => pr.type !== 'merged')
+          .map((pr) => pr.url)
+          .filter(Boolean)
+      ),
+    ];
 
     // Merged list is historical; still enrich open authored/assigned/today.
     void merged;
 
-    const details = await this.fetchPrDetails(urls);
+    const fetched = await this.fetchPrDetails(urls);
+    // Merge into existing so a partial GraphQL failure does not wipe checks already shown.
+    const existing =
+      (await this.storageService.get<PrDetailsMap>(STORAGE_KEY_PR_DETAILS)) ?? {};
+    const details: PrDetailsMap = { ...existing, ...fetched };
     await this.storageService.set(STORAGE_KEY_PR_DETAILS, details);
     return details;
   }
@@ -143,9 +154,10 @@ export class GitHubApiService implements IGitHubApiService {
    * is not SSO-authorized for a private org. The HTML scrape already sees those PRs.
    */
   async fetchTodayPrs(): Promise<TodayPullRequest[]> {
-    const [authored, assigned] = await Promise.all([
+    const [authored, assigned, merged] = await Promise.all([
       this.storageService.getStoredPRs(STORAGE_KEY_AUTHORED_PRS),
       this.storageService.getStoredPRs(STORAGE_KEY_ASSIGNED_PRS),
+      this.storageService.getStoredPRs(STORAGE_KEY_MERGED_PRS),
     ]);
 
     const byUrl = new Map<string, TodayPullRequest>();
@@ -155,13 +167,21 @@ export class GitHubApiService implements IGitHubApiService {
 
     if (await this.hasToken()) {
       const date = localDateYmd();
-      // WHY [user-review-requested]: `review-requested:@me` also matches team requests for every
-      // team you are on (noisy in large orgs). To Review scrape already uses user-review-requested.
+      const settings = await this.storageService.getExtensionSettings();
+      // WHY [user-review-requested]: personal requests stay the default. Team membership noise
+      // is opt-in via inbox.includeTeamReviews (popup Teams toggle).
+      // WHY [is:open]: merged PRs created/updated today must not reappear in Today or the badge.
       const queries: Array<{ q: string; reason: TodayReason }> = [
-        { q: `is:pr author:@me created:>=${date}`, reason: 'mine' },
-        { q: `is:pr user-review-requested:@me updated:>=${date}`, reason: 'review' },
-        { q: `is:pr mentions:@me updated:>=${date}`, reason: 'mentioned' },
+        { q: `is:pr is:open author:@me created:>=${date}`, reason: 'mine' },
+        { q: `is:pr is:open user-review-requested:@me updated:>=${date}`, reason: 'review' },
+        { q: `is:pr is:open mentions:@me updated:>=${date}`, reason: 'mentioned' },
       ];
+      if (settings.inbox.includeTeamReviews) {
+        queries.splice(2, 0, {
+          q: `is:pr is:open review-requested:@me -user-review-requested:@me updated:>=${date}`,
+          reason: 'team',
+        });
+      }
 
       for (const { q, reason } of queries) {
         try {
@@ -177,10 +197,78 @@ export class GitHubApiService implements IGitHubApiService {
       }
     }
 
-    const prs = sortTodayPrs([...byUrl.values()]);
+    const prs = sortTodayPrs(
+      pruneMergedFromToday([...byUrl.values()], merged?.prs ?? [])
+    );
     await this.storageService.setStoredPRs(STORAGE_KEY_TODAY_PRS, prs);
     this.debugService.log(`[GitHubApiService] Today list: ${prs.length} PR(s)`);
     return prs;
+  }
+
+  async listViewerTeams(): Promise<Array<{ slug: string; name: string }>> {
+    if (!(await this.hasToken())) return [];
+    const teams: Array<{ slug: string; name: string }> = [];
+    const seen = new Set<string>();
+    let page = 1;
+    while (page <= 10) {
+      const batch = await this.restJson<
+        Array<{
+          slug?: string;
+          name?: string;
+          organization?: { login?: string };
+        }>
+      >('GET', `/user/teams?per_page=100&page=${page}`);
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      for (const row of batch) {
+        const org = row.organization?.login;
+        const teamSlug = row.slug;
+        if (!org || !teamSlug) continue;
+        const slug = normalizeTeamSlug(`${org}/${teamSlug}`);
+        if (!slug || seen.has(slug)) continue;
+        seen.add(slug);
+        teams.push({ slug, name: row.name?.trim() || teamSlug });
+      }
+      if (batch.length < 100) break;
+      page += 1;
+    }
+    return teams.sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
+  /**
+   * For team-kind rows missing `requestedTeams`, resolve reviewRequests via GraphQL
+   * so Settings team allowlists can filter accurately.
+   */
+  async enrichRequestedTeamsOnStoredLists(): Promise<void> {
+    if (!(await this.hasToken())) return;
+    const [assigned, today] = await Promise.all([
+      this.storageService.getStoredPRs(STORAGE_KEY_ASSIGNED_PRS),
+      this.storageService.getStoredPRs(STORAGE_KEY_TODAY_PRS),
+    ]);
+    const assignedPrs = assigned?.prs ?? [];
+    const todayPrs = today?.prs ?? [];
+    const needUrls = [
+      ...assignedPrs.filter(
+        (pr) => isTeamReviewRequest(pr) && !(pr.requestedTeams && pr.requestedTeams.length)
+      ),
+      ...todayPrs.filter(
+        (pr) => isTeamReviewRequest(pr) && !(pr.requestedTeams && pr.requestedTeams.length)
+      ),
+    ].map((pr) => pr.url);
+    if (needUrls.length === 0) return;
+
+    const teamsByUrl = await this.fetchRequestedTeamsByUrl([...new Set(needUrls)]);
+    if (Object.keys(teamsByUrl).length === 0) return;
+
+    const patch = (prs: PullRequest[]) =>
+      prs.map((pr) => {
+        const teams = teamsByUrl[pr.url];
+        return teams?.length ? { ...pr, requestedTeams: teams } : pr;
+      });
+
+    await Promise.all([
+      this.storageService.setStoredPRs(STORAGE_KEY_ASSIGNED_PRS, patch(assignedPrs)),
+      this.storageService.setStoredPRs(STORAGE_KEY_TODAY_PRS, patch(todayPrs)),
+    ]);
   }
 
   async approve(url: string): Promise<void> {
@@ -269,6 +357,7 @@ export class GitHubApiService implements IGitHubApiService {
     const state = String(n.state || 'OPEN').toUpperCase();
     const type: PullRequest['type'] =
       state === 'MERGED' ? 'merged' : isDraft ? 'draft' : 'open';
+    const requestedTeams = extractRequestedTeamSlugs(n.reviewRequests);
 
     return {
       id: url,
@@ -283,6 +372,9 @@ export class GitHubApiService implements IGitHubApiService {
       updatedAt: typeof n.updatedAt === 'string' ? n.updatedAt : undefined,
       type,
       todayReason: reason,
+      reviewRequestKind:
+        reason === 'team' ? 'team' : reason === 'review' ? 'direct' : undefined,
+      ...(requestedTeams.length ? { requestedTeams } : {}),
     };
   }
 
@@ -381,6 +473,7 @@ export class GitHubApiService implements IGitHubApiService {
               rebaseMergeAllowed
               viewerDefaultMergeMethod
             }
+            statusCheckRollup { state }
             commits(last: 1) {
               nodes {
                 commit {
@@ -408,9 +501,12 @@ export class GitHubApiService implements IGitHubApiService {
 
     const out: PrDetailsMap = {};
     for (let i = 0; i < urls.length; i++) {
-      const node = data[`p${i}`];
-      const mapped = mapResourceToDetails(node, urls[i], viewerLogin);
-      if (mapped) out[mapped.url] = mapped;
+      const requestUrl = urls[i];
+      const mapped = mapResourceToDetails(data[`p${i}`], requestUrl, viewerLogin);
+      if (!mapped) continue;
+      // Key by the URL the popup already has on the row (search/scrape), not only
+      // GraphQL's canonical url — otherwise checks never bind until a later refresh.
+      out[requestUrl] = { ...mapped, url: requestUrl };
     }
     return out;
   }
@@ -433,6 +529,18 @@ export class GitHubApiService implements IGitHubApiService {
               updatedAt
               author { login avatarUrl }
               repository { nameWithOwner }
+              reviewRequests(first: 20) {
+                nodes {
+                  requestedReviewer {
+                    ... on Team {
+                      combinedSlug
+                      slug
+                      name
+                      organization { login }
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -441,6 +549,80 @@ export class GitHubApiService implements IGitHubApiService {
     );
     return data.search?.nodes ?? [];
   }
+
+  private async fetchRequestedTeamsByUrl(
+    urls: string[]
+  ): Promise<Record<string, string[]>> {
+    const unique = [...new Set(urls.filter(Boolean))];
+    const out: Record<string, string[]> = {};
+    for (let i = 0; i < unique.length; i += DETAILS_CHUNK) {
+      const chunk = unique.slice(i, i + DETAILS_CHUNK);
+      const aliases: string[] = [];
+      const variables: Record<string, string> = {};
+      chunk.forEach((url, index) => {
+        const key = `p${index}`;
+        variables[key] = url;
+        aliases.push(`
+          ${key}: resource(url: $${key}) {
+            ... on PullRequest {
+              url
+              reviewRequests(first: 20) {
+                nodes {
+                  requestedReviewer {
+                    ... on Team {
+                      combinedSlug
+                      slug
+                      organization { login }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `);
+      });
+      const varDefs = chunk.map((_, idx) => `$p${idx}: URI!`).join(', ');
+      try {
+        const data = await this.graphql<Record<string, unknown>>(
+          `query(${varDefs}) { ${aliases.join('\n')} }`,
+          variables
+        );
+        for (let index = 0; index < chunk.length; index++) {
+          const node = data[`p${index}`] as Record<string, unknown> | undefined;
+          const url = typeof node?.url === 'string' ? node.url : chunk[index];
+          const teams = extractRequestedTeamSlugs(node?.reviewRequests);
+          if (url && teams.length) out[url] = teams;
+        }
+      } catch (error) {
+        this.debugService.warn('[GitHubApiService] requestedTeams enrich failed:', error);
+      }
+    }
+    return out;
+  }
+}
+
+function extractRequestedTeamSlugs(reviewRequests: unknown): string[] {
+  const nodes = (reviewRequests as { nodes?: unknown } | undefined)?.nodes;
+  if (!Array.isArray(nodes)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    const reviewer = (node as { requestedReviewer?: Record<string, unknown> } | null)
+      ?.requestedReviewer;
+    if (!reviewer) continue;
+    const combined =
+      typeof reviewer.combinedSlug === 'string'
+        ? reviewer.combinedSlug
+        : typeof reviewer.slug === 'string' &&
+            typeof (reviewer.organization as { login?: string } | undefined)?.login === 'string'
+          ? `${(reviewer.organization as { login: string }).login}/${reviewer.slug}`
+          : null;
+    const slug = normalizeTeamSlug(combined);
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    out.push(slug);
+  }
+  return out;
 }
 
 function requireParsed(url: string) {
@@ -474,10 +656,13 @@ function mapResourceToDetails(
   if (typeof n.id !== 'string') return null;
 
   const repo = (n.repository ?? {}) as Record<string, unknown>;
+  const prRollup = (n.statusCheckRollup as { state?: string } | null | undefined)?.state;
   const commits = n.commits as {
     nodes?: Array<{ commit?: { statusCheckRollup?: { state?: string } } }>;
   } | undefined;
-  const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null;
+  const commitRollup = commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null;
+  // Prefer PR-level rollup (head ref); commit rollup is fallback. Neither depends on reviewDecision.
+  const rollup = prRollup ?? commitRollup;
   const auto = n.autoMergeRequest as { enabledAt?: string } | null;
   const author = n.author as { login?: string } | undefined;
   const url = typeof n.url === 'string' ? n.url : fallbackUrl;

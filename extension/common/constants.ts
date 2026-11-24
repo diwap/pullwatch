@@ -220,6 +220,13 @@ export const GITHUB_BASE_URL = 'https://github.com';
 export const GITHUB_REVIEW_REQUESTS_URL_TEMPLATE = (baseUrl: string) =>
   `${baseUrl}/pulls?q=is%3Aopen+is%3Apr+user-review-requested%3A%40me+`;
 
+/**
+ * Team membership review requests only: `review-requested:@me` minus personal
+ * `user-review-requested:@me` (used when inbox.includeTeamReviews is on).
+ */
+export const GITHUB_TEAM_REVIEW_REQUESTS_URL_TEMPLATE = (baseUrl: string) =>
+  `${baseUrl}/pulls?q=is%3Aopen+is%3Apr+review-requested%3A%40me+-user-review-requested%3A%40me`;
+
 export const GITHUB_MERGED_PRS_URL_TEMPLATE = (baseUrl: string) =>
   `${baseUrl}/pulls?q=is%3Apr+is%3Amerged+author%3A%40me`;
 

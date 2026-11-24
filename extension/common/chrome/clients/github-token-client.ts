@@ -24,4 +24,8 @@ export class GitHubTokenClient {
   test(token?: string): Promise<GitHubTokenStatus> {
     return this.bg.dispatch(GITHUB_TOKEN_ACTION.testToken, { token });
   }
+
+  listViewerTeams(): Promise<Array<{ slug: string; name: string }>> {
+    return this.bg.dispatch(GITHUB_TOKEN_ACTION.listViewerTeams);
+  }
 }

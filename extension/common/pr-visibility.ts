@@ -1,3 +1,4 @@
+import { isTeamReviewRequest } from './review-request-kind';
 import type { InboxDateRange, PullRequest } from './types';
 
 /** Stored value that means "do not filter by organization". */
@@ -133,18 +134,38 @@ export function countVisibleInboxBadge(
   showDraftsInList: boolean,
   orgFilter: string | null | undefined,
   hiddenIds: ReadonlySet<string>,
-  dateRange: InboxDateRange | null | undefined = 'all'
+  dateRange: InboxDateRange | null | undefined = 'all',
+  includeTeamReviews = false,
+  teamReviewSlugs: readonly string[] = []
 ): number {
   const ids = new Set<string>();
+  const allow = new Set(
+    teamReviewSlugs
+      .map((slug) => slug.trim().toLowerCase())
+      .filter((slug) => slug.includes('/'))
+  );
+  const teamAllowed = (pr: PullRequest) => {
+    if (!isTeamReviewRequest(pr)) return true;
+    if (!includeTeamReviews) return false;
+    if (allow.size === 0) return true;
+    const teams = (pr.requestedTeams ?? []).map((s) => s.trim().toLowerCase());
+    if (teams.length === 0) return true;
+    return teams.some((slug) => allow.has(slug));
+  };
+
   for (const pr of filterToVisibleInbox(todayPrs, {
     orgFilter,
     hiddenIds,
     skipDateRange: true,
   })) {
+    if (pr.type === 'merged') continue;
+    if (!teamAllowed(pr)) continue;
     if (pr.id) ids.add(pr.id);
   }
   for (const pr of assignedPrs) {
+    if (pr.type === 'merged') continue;
     if (pr.reviewStatus === 'reviewed') continue;
+    if (!teamAllowed(pr)) continue;
     if (!showDraftsInList && pr.type === 'draft') continue;
     if (hiddenIds.has(pr.id)) continue;
     if (!prMatchesOrg(pr, orgFilter)) continue;

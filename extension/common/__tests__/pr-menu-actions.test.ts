@@ -55,12 +55,42 @@ describe('getPrMenuActions', () => {
     ).toEqual(expect.arrayContaining(['bypassMerge', 'close']));
   });
 
-  it('shows update branch and approve when allowed', () => {
+  it('shows update branch and approve when checks passed', () => {
     const ids = getPrMenuActions(
-      details({ mergeStateStatus: 'BEHIND', viewerCanUpdateBranch: true }),
+      details({
+        mergeStateStatus: 'BEHIND',
+        viewerCanUpdateBranch: true,
+        checkState: 'SUCCESS',
+        reviewDecision: 'REVIEW_REQUIRED',
+      }),
       { isHidden: false, canApprove: true, hasToken: true }
     ).map((a) => a.id);
     expect(ids).toEqual(expect.arrayContaining(['approve', 'updateBranch']));
+  });
+
+  it('hides approve until checks are green (even when review is still required)', () => {
+    expect(
+      getPrMenuActions(
+        details({ checkState: 'PENDING', reviewDecision: 'REVIEW_REQUIRED' }),
+        { isHidden: false, canApprove: true, hasToken: true }
+      ).map((a) => a.id)
+    ).not.toContain('approve');
+
+    expect(
+      getPrMenuActions(null, { isHidden: false, canApprove: true, hasToken: true }).map(
+        (a) => a.id
+      )
+    ).toEqual(['hide']);
+  });
+
+  it('allows approve when there are no status checks', () => {
+    expect(
+      getPrMenuActions(details({ checkState: null, reviewDecision: 'REVIEW_REQUIRED' }), {
+        isHidden: false,
+        canApprove: true,
+        hasToken: true,
+      }).map((a) => a.id)
+    ).toContain('approve');
   });
 
   it('treats UNKNOWN + mergeable as merge-ready and still offers close', () => {

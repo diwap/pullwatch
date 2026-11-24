@@ -23,6 +23,8 @@ export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
     orgFilter: '',
     dateRange: 'all',
     showHidden: false,
+    includeTeamReviews: false,
+    teamReviewSlugs: [],
   },
 };
 
@@ -61,6 +63,26 @@ export function ensureCompleteSettings(
         typeof base.inbox?.showHidden === 'boolean'
           ? base.inbox.showHidden
           : DEFAULT_EXTENSION_SETTINGS.inbox.showHidden,
+      includeTeamReviews:
+        typeof base.inbox?.includeTeamReviews === 'boolean'
+          ? base.inbox.includeTeamReviews
+          : DEFAULT_EXTENSION_SETTINGS.inbox.includeTeamReviews,
+      teamReviewSlugs: normalizeTeamReviewSlugs(base.inbox?.teamReviewSlugs),
     },
   };
+}
+
+/** Empty / invalid → all teams (`[]`). Dedupes and lowercases `org/slug` entries. */
+export function normalizeTeamReviewSlugs(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const slug = item.trim().toLowerCase();
+    if (!slug || !slug.includes('/') || seen.has(slug)) continue;
+    seen.add(slug);
+    out.push(slug);
+  }
+  return out;
 }

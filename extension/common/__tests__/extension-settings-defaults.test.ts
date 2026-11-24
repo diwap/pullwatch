@@ -26,16 +26,38 @@ describe('ensureCompleteSettings', () => {
 
   it('normalizes a blank org filter to all organizations', () => {
     const merged = ensureCompleteSettings({
-      inbox: { orgFilter: '  all ', dateRange: '30d', showHidden: true },
+      inbox: {
+        orgFilter: '  all ',
+        dateRange: '30d',
+        showHidden: true,
+        includeTeamReviews: true,
+        teamReviewSlugs: [],
+      },
     });
     expect(merged.inbox.orgFilter).toBe('');
     expect(merged.inbox.dateRange).toBe('30d');
     expect(merged.inbox.showHidden).toBe(true);
+    expect(merged.inbox.includeTeamReviews).toBe(true);
   });
 
-  it('defaults dateRange and showHidden when inbox is missing', () => {
+  it('defaults dateRange, showHidden, and includeTeamReviews when inbox is missing', () => {
     const merged = ensureCompleteSettings({});
     expect(merged.inbox.dateRange).toBe('all');
     expect(merged.inbox.showHidden).toBe(false);
+    expect(merged.inbox.includeTeamReviews).toBe(false);
+    expect(merged.inbox.teamReviewSlugs).toEqual([]);
+  });
+
+  it('normalizes teamReviewSlugs (empty = all teams)', () => {
+    const merged = ensureCompleteSettings({
+      inbox: {
+        orgFilter: '',
+        dateRange: 'all',
+        showHidden: false,
+        includeTeamReviews: true,
+        teamReviewSlugs: [' Acme/Frontend ', 'acme/frontend', 'bad', 'org/backend'],
+      },
+    });
+    expect(merged.inbox.teamReviewSlugs).toEqual(['acme/frontend', 'org/backend']);
   });
 });

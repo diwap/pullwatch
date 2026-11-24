@@ -23,6 +23,7 @@ interface PrItemHeaderRowProps {
 const TODAY_REASON_LABEL: Record<NonNullable<PullRequest['todayReason']>, string> = {
   mine: 'Mine',
   review: 'Review',
+  team: 'Team',
   mentioned: 'Mentioned',
 };
 

@@ -3,6 +3,7 @@ import type { PullRequest } from '../types';
 import {
   isLocalCalendarDay,
   localDateYmd,
+  pruneMergedFromToday,
   seedTodayFromScrapedLists,
   upsertTodayPr,
 } from '../today-prs';
@@ -102,6 +103,19 @@ describe('seedTodayFromScrapedLists', () => {
     expect(seeded).toHaveLength(1);
     expect(seeded[0]?.todayReason).toBe('mine');
   });
+
+  it('skips merged authored PRs created today', () => {
+    const authored = [
+      pr({
+        url: 'https://github.com/AcmeCorp/widgets/pull/8',
+        createdAt: today,
+        eventAt: today,
+        eventAtKind: 'created',
+        type: 'merged',
+      }),
+    ];
+    expect(seedTodayFromScrapedLists(authored, [], now)).toEqual([]);
+  });
 });
 
 describe('upsertTodayPr', () => {
@@ -113,5 +127,26 @@ describe('upsertTodayPr', () => {
     expect(byUrl.get(url)?.todayReason).toBe('review');
     upsertTodayPr(byUrl, pr({ url }), 'mine');
     expect(byUrl.get(url)?.todayReason).toBe('mine');
+  });
+
+  it('removes a Today row when a later hit is merged', () => {
+    const byUrl = new Map();
+    const url = 'https://github.com/AcmeCorp/widgets/pull/11';
+    upsertTodayPr(byUrl, pr({ url }), 'mine');
+    upsertTodayPr(byUrl, pr({ url, type: 'merged' }), 'mine');
+    expect(byUrl.has(url)).toBe(false);
+  });
+});
+
+describe('pruneMergedFromToday', () => {
+  it('drops rows present in the Merged list', () => {
+    const openToday = [
+      { ...pr({ url: 'https://github.com/AcmeCorp/widgets/pull/1' }), todayReason: 'mine' as const },
+      { ...pr({ url: 'https://github.com/AcmeCorp/widgets/pull/2' }), todayReason: 'mine' as const },
+    ];
+    const merged = [pr({ url: 'https://github.com/AcmeCorp/widgets/pull/1', type: 'merged' })];
+    expect(pruneMergedFromToday(openToday, merged).map((p) => p.url)).toEqual([
+      'https://github.com/AcmeCorp/widgets/pull/2',
+    ]);
   });
 });

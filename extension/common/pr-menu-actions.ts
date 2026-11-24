@@ -44,7 +44,9 @@ export function getPrMenuActions(
   if (!context.hasToken || !details) return actions;
   if (details.state !== 'OPEN' || details.isDraft) return actions;
 
-  if (context.canApprove) {
+  // Approve after CI is green (or no checks configured). Independent of reviewDecision /
+  // merge BLOCKED — those wait on approval; checks must not.
+  if (context.canApprove && checksAllowApprove(details.checkState)) {
     actions.push({ id: 'approve', label: 'Approve' });
   }
 
@@ -83,6 +85,11 @@ export function getPrMenuActions(
   }
 
   return actions;
+}
+
+/** True when CI is done successfully, or the PR has no status checks at all. */
+export function checksAllowApprove(checkState: PrDetails['checkState']): boolean {
+  return checkState === 'SUCCESS' || checkState == null;
 }
 
 export function resolveMergeMethod(details: PrDetails): 'merge' | 'squash' | 'rebase' {
