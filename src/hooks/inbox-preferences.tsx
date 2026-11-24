@@ -20,6 +20,7 @@ import {
   prMatchesOrg,
   prWithinDateRange,
 } from '@common/pr-visibility';
+import { filterByTeamReviewPreference } from '@common/review-request-kind';
 
 interface InboxPreferences {
   /** False until the extension has read the org filter and hidden ids. */
@@ -27,6 +28,11 @@ interface InboxPreferences {
   orgFilter: string;
   dateRange: InboxDateRange;
   showHidden: boolean;
+  /** Popup Teams toggle — include team membership review requests. */
+  includeTeamReviews: boolean;
+  setIncludeTeamReviews: (next: boolean) => Promise<void>;
+  /** Empty = all teams; otherwise only these `org/slug` values. */
+  teamReviewSlugs: string[];
   hiddenIds: ReadonlySet<string>;
   hide: (prId: string) => void;
   unhide: (prId: string) => void;
@@ -43,6 +49,8 @@ export const InboxPreferencesProvider = ({ children }: { children: ReactNode }) 
   const [orgFilter, setOrgFilter] = useState('');
   const [dateRange, setDateRange] = useState<InboxDateRange>('all');
   const [showHidden, setShowHidden] = useState(false);
+  const [includeTeamReviews, setIncludeTeamReviewsState] = useState(false);
+  const [teamReviewSlugs, setTeamReviewSlugs] = useState<string[]>([]);
   const [hasToken, setHasToken] = useState(false);
   const [hiddenIds, setHiddenIds] = useState<string[]>([]);
   const hiddenRef = useRef<string[]>([]);
@@ -66,6 +74,8 @@ export const InboxPreferencesProvider = ({ children }: { children: ReactNode }) 
         setOrgFilter(normalizedOrgFilter(settings.inbox.orgFilter));
         setDateRange(normalizedDateRange(settings.inbox.dateRange));
         setShowHidden(Boolean(settings.inbox.showHidden));
+        setIncludeTeamReviewsState(Boolean(settings.inbox.includeTeamReviews));
+        setTeamReviewSlugs([...(settings.inbox.teamReviewSlugs ?? [])]);
         setHiddenIds([...hiddenPrIdSet(stored[STORAGE_KEY_HIDDEN_PR_IDS])]);
         setHasToken(Boolean(tokenStatus.configured));
       } catch (error) {
@@ -81,6 +91,8 @@ export const InboxPreferencesProvider = ({ children }: { children: ReactNode }) 
       setOrgFilter(normalizedOrgFilter(settings.inbox.orgFilter));
       setDateRange(normalizedDateRange(settings.inbox.dateRange));
       setShowHidden(Boolean(settings.inbox.showHidden));
+      setIncludeTeamReviewsState(Boolean(settings.inbox.includeTeamReviews));
+      setTeamReviewSlugs([...(settings.inbox.teamReviewSlugs ?? [])]);
     });
 
     const onStorageChanged = (
@@ -133,6 +145,20 @@ export const InboxPreferencesProvider = ({ children }: { children: ReactNode }) 
     [persistHidden]
   );
 
+  const setIncludeTeamReviews = useCallback(async (next: boolean) => {
+    setIncludeTeamReviewsState(next);
+    if (!isExtensionContext()) return;
+    try {
+      const current = await chromeExtensionService.settings.get();
+      await chromeExtensionService.settings.save({
+        inbox: { ...current.inbox, includeTeamReviews: next },
+      });
+      await chromeExtensionService.settings.syncBadge();
+    } catch (error) {
+      console.warn('[InboxPreferences] Failed to save team reviews preference:', error);
+    }
+  }, []);
+
   const hiddenIdSet = useMemo(() => new Set(hiddenIds), [hiddenIds]);
 
   const value = useMemo<InboxPreferences>(
@@ -141,12 +167,27 @@ export const InboxPreferencesProvider = ({ children }: { children: ReactNode }) 
       orgFilter,
       dateRange,
       showHidden,
+      includeTeamReviews,
+      setIncludeTeamReviews,
+      teamReviewSlugs,
       hiddenIds: hiddenIdSet,
       hide,
       unhide,
       hasToken,
     }),
-    [ready, orgFilter, dateRange, showHidden, hiddenIdSet, hide, unhide, hasToken]
+    [
+      ready,
+      orgFilter,
+      dateRange,
+      showHidden,
+      includeTeamReviews,
+      setIncludeTeamReviews,
+      teamReviewSlugs,
+      hiddenIdSet,
+      hide,
+      unhide,
+      hasToken,
+    ]
   );
 
   return (
@@ -159,6 +200,9 @@ const fallbackPreferences: InboxPreferences = {
   orgFilter: '',
   dateRange: 'all',
   showHidden: false,
+  includeTeamReviews: false,
+  setIncludeTeamReviews: async () => {},
+  teamReviewSlugs: [],
   hiddenIds: EMPTY_HIDDEN,
   hide: () => {},
   unhide: () => {},
@@ -172,7 +216,15 @@ export const useInboxPartition = (
   prs: PullRequest[],
   options: { skipDateRange?: boolean } = {}
 ) => {
-  const { ready, orgFilter, dateRange, showHidden, hiddenIds } = useInboxPreferences();
+  const {
+    ready,
+    orgFilter,
+    dateRange,
+    showHidden,
+    includeTeamReviews,
+    teamReviewSlugs,
+    hiddenIds,
+  } = useInboxPreferences();
   return useMemo(() => {
     if (!ready) {
       return {
@@ -180,23 +232,41 @@ export const useInboxPartition = (
         orgFilter,
         dateRange,
         showHidden,
+        includeTeamReviews,
+        teamReviewSlugs,
         visible: [] as PullRequest[],
         hidden: [] as PullRequest[],
       };
     }
-    const filtered = prs.filter((pr) => {
-      if (!prMatchesOrg(pr, orgFilter)) return false;
-      if (!options.skipDateRange && !prWithinDateRange(pr, dateRange)) return false;
-      return true;
-    });
+    const filtered = filterByTeamReviewPreference(
+      prs.filter((pr) => {
+        if (!prMatchesOrg(pr, orgFilter)) return false;
+        if (!options.skipDateRange && !prWithinDateRange(pr, dateRange)) return false;
+        return true;
+      }),
+      includeTeamReviews,
+      teamReviewSlugs
+    );
     const partitioned = partitionByHidden(filtered, hiddenIds);
     return {
       ready,
       orgFilter,
       dateRange,
       showHidden,
+      includeTeamReviews,
+      teamReviewSlugs,
       visible: partitioned.visible,
       hidden: showHidden ? partitioned.hidden : ([] as PullRequest[]),
     };
-  }, [prs, ready, orgFilter, dateRange, showHidden, hiddenIds, options.skipDateRange]);
+  }, [
+    prs,
+    ready,
+    orgFilter,
+    dateRange,
+    showHidden,
+    includeTeamReviews,
+    teamReviewSlugs,
+    hiddenIds,
+    options.skipDateRange,
+  ]);
 };

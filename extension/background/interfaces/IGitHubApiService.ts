@@ -23,6 +23,10 @@ export interface IGitHubApiService extends IService {
   refreshPrDetail(url: string): Promise<PrDetails | null>;
   syncPrDetailsFromStoredLists(): Promise<PrDetailsMap>;
   fetchTodayPrs(): Promise<TodayPullRequest[]>;
+  /** Fill `requestedTeams` on team-kind rows in Today / assigned storage. */
+  enrichRequestedTeamsOnStoredLists(): Promise<void>;
+  /** Teams the authenticated user belongs to (`org/slug`). */
+  listViewerTeams(): Promise<Array<{ slug: string; name: string }>>;
 
   approve(url: string): Promise<void>;
   updateBranch(url: string): Promise<void>;

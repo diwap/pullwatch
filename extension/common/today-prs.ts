@@ -20,7 +20,17 @@ export function isLocalCalendarDay(iso: string | undefined, now = new Date()): b
   );
 }
 
-const REASON_RANK: Record<TodayReason, number> = { mine: 0, review: 1, mentioned: 2 };
+const REASON_RANK: Record<TodayReason, number> = {
+  mine: 0,
+  review: 1,
+  team: 2,
+  mentioned: 3,
+};
+
+/** Today is an open-PR inbox — merged (and non-open) rows never belong there. */
+export function isOpenTodayCandidate(pr: Pick<PullRequest, 'type'>): boolean {
+  return pr.type === 'open' || pr.type === 'draft';
+}
 
 /**
  * Seeds Today from session-scraped Authored / To Review lists.
@@ -34,12 +44,7 @@ export function seedTodayFromScrapedLists(
   const byUrl = new Map<string, TodayPullRequest>();
 
   const upsert = (pr: PullRequest, reason: TodayReason) => {
-    if (!pr.url) return;
-    const next: TodayPullRequest = { ...pr, todayReason: reason, id: pr.id || pr.url };
-    const existing = byUrl.get(next.url);
-    if (!existing || REASON_RANK[reason] < REASON_RANK[existing.todayReason]) {
-      byUrl.set(next.url, next);
-    }
+    upsertTodayPr(byUrl, pr, reason);
   };
 
   for (const pr of authored) {
@@ -50,7 +55,7 @@ export function seedTodayFromScrapedLists(
   }
 
   for (const pr of assigned) {
-    // Match To Review: only pending personal review requests, not already-reviewed rows.
+    // Match To Review: only pending review requests, not already-reviewed rows.
     if (pr.reviewStatus === 'reviewed') continue;
     if (pr.timestampParseFailed) continue;
     if (
@@ -58,7 +63,14 @@ export function seedTodayFromScrapedLists(
       isLocalCalendarDay(pr.updatedAt, now) ||
       isLocalCalendarDay(pr.eventAt, now)
     ) {
-      upsert(pr, 'review');
+      const reason: TodayReason = pr.reviewRequestKind === 'team' ? 'team' : 'review';
+      upsert(
+        {
+          ...pr,
+          reviewRequestKind: pr.reviewRequestKind ?? (reason === 'team' ? 'team' : 'direct'),
+        },
+        reason
+      );
     }
   }
 
@@ -72,11 +84,29 @@ export function upsertTodayPr(
   reason: TodayReason
 ): void {
   if (!pr.url) return;
+  // Drop merged/closed hits and clear any stale open row for the same URL.
+  if (!isOpenTodayCandidate(pr)) {
+    byUrl.delete(pr.url);
+    return;
+  }
   const next: TodayPullRequest = { ...pr, todayReason: reason, id: pr.id || pr.url };
   const existing = byUrl.get(next.url);
   if (!existing || REASON_RANK[reason] < REASON_RANK[existing.todayReason]) {
     byUrl.set(next.url, next);
   }
+}
+
+/** Remove Today rows that appear in the Merged list (or are already typed merged). */
+export function pruneMergedFromToday(
+  today: TodayPullRequest[],
+  merged: PullRequest[]
+): TodayPullRequest[] {
+  const mergedIds = new Set(
+    merged.flatMap((pr) => [pr.id, pr.url].filter((value): value is string => Boolean(value)))
+  );
+  return today.filter(
+    (pr) => isOpenTodayCandidate(pr) && !mergedIds.has(pr.id) && !mergedIds.has(pr.url)
+  );
 }
 
 export function sortTodayPrs(prs: TodayPullRequest[]): TodayPullRequest[] {

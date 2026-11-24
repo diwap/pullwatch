@@ -24,6 +24,8 @@ export const GITHUB_TOKEN_ACTION = {
   saveToken: 'saveToken',
   clearToken: 'clearToken',
   testToken: 'testToken',
+  /** List `org/slug` teams the token user belongs to (for Settings team filter). */
+  listViewerTeams: 'listViewerTeams',
 } as const;
 
 export const PR_ACTION = {

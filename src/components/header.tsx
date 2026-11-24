@@ -15,6 +15,7 @@ import { useDebugMode, useResetDebugMode } from '@src/stores/debug';
 import { useHeaderStorageSignals } from '@src/hooks/use-header-storage-signals';
 import { HeaderLastUpdatedLabel } from './header-last-updated-label';
 import { usePrCelebrateSignal } from '@src/stores/pr-celebrate-signal';
+import { TeamReviewsToggle } from './team-reviews-toggle';
 
 export const Header = () => {
   const squash = useSquashMinigameExperience();
@@ -117,6 +118,7 @@ export const Header = () => {
             </button>
           </div>
         ) : null}
+        <TeamReviewsToggle onEnabled={handleRefresh} />
         <RefreshButton
           manualFetchInProgress={manualFetchInProgress}
           backgroundFetchInProgress={backgroundFetchInProgress}

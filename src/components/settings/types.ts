@@ -18,6 +18,10 @@ export interface ExtensionSettings {
     orgFilter: string;
     dateRange: InboxDateRange;
     showHidden: boolean;
+    /** Popup header toggle — include team membership review requests. */
+    includeTeamReviews: boolean;
+    /** Empty = all teams; otherwise only these `org/slug` values. */
+    teamReviewSlugs: string[];
   };
 }
 
@@ -36,5 +40,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
     orgFilter: '',
     dateRange: 'all',
     showHidden: false,
+    includeTeamReviews: false,
+    teamReviewSlugs: [],
   },
 };

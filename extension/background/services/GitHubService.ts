@@ -7,6 +7,7 @@ import type { CompiledPattern } from '@common/pattern-types';
 import {
   GITHUB_BASE_URL,
   GITHUB_REVIEW_REQUESTS_URL_TEMPLATE,
+  GITHUB_TEAM_REVIEW_REQUESTS_URL_TEMPLATE,
   GITHUB_MERGED_PRS_URL_TEMPLATE,
   GITHUB_REVIEWED_PRS_URL_TEMPLATE,
   GITHUB_AUTHORED_APPROVED_URL_TEMPLATE,
@@ -83,6 +84,7 @@ export class GitHubService implements IGitHubService {
   private initialized = false;
   private baseURL: string;
   private reviewRequestsURL: string;
+  private teamReviewRequestsURL: string;
   private mergedPRsURL: string;
   private reviewedPRsURL: string;
   private authoredApprovedURL: string;
@@ -105,6 +107,7 @@ export class GitHubService implements IGitHubService {
     this.patternRegistryService = patternRegistryService;
     this.baseURL = GITHUB_BASE_URL;
     this.reviewRequestsURL = GITHUB_REVIEW_REQUESTS_URL_TEMPLATE(this.baseURL);
+    this.teamReviewRequestsURL = GITHUB_TEAM_REVIEW_REQUESTS_URL_TEMPLATE(this.baseURL);
     this.mergedPRsURL = GITHUB_MERGED_PRS_URL_TEMPLATE(this.baseURL);
     this.reviewedPRsURL = GITHUB_REVIEWED_PRS_URL_TEMPLATE(this.baseURL);
     this.authoredApprovedURL = GITHUB_AUTHORED_APPROVED_URL_TEMPLATE(this.baseURL);
@@ -505,6 +508,29 @@ export class GitHubService implements IGitHubService {
       }
       throw new Error(
         `Network or parsing error while fetching PRs: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  async fetchTeamAssignedPRs(): Promise<PullRequest[]> {
+    this.debugService.log(
+      '[GitHubService] fetchTeamAssignedPRs — list template (effective URL in fetchPRs routing):',
+      this.teamReviewRequestsURL
+    );
+    try {
+      return await this.fetchPRs(this.teamReviewRequestsURL, 'team assigned PR fetch');
+    } catch (error: unknown) {
+      if (error instanceof RateLimitError) throw error;
+      if (error instanceof ParserBreakageError) throw error;
+      if (error instanceof GitHubOutageError) throw error;
+      this.logListFetchFailure('[GitHubService] Error in fetchTeamAssignedPRs:', error);
+      if (isGitHubWebSessionAuthError(error)) {
+        throw error;
+      }
+      throw new Error(
+        `Network or parsing error while fetching team review PRs: ${
           error instanceof Error ? error.message : String(error)
         }`
       );

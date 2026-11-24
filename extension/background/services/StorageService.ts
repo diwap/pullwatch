@@ -243,9 +243,15 @@ export class StorageService implements IStorageService {
   async setExtensionSettings(settings: Partial<ExtensionSettings>): Promise<void> {
     try {
       const currentSettings = await this.getExtensionSettings();
+      // Deep-merge each category so a settings-page save that omits popup-only inbox
+      // fields (e.g. includeTeamReviews) does not wipe them back to defaults.
       const updatedSettings = ensureCompleteSettings({
         ...currentSettings,
         ...settings,
+        assigned: { ...currentSettings.assigned, ...settings.assigned },
+        merged: { ...currentSettings.merged, ...settings.merged },
+        authored: { ...currentSettings.authored, ...settings.authored },
+        inbox: { ...currentSettings.inbox, ...settings.inbox },
       });
 
       await this.setSync(STORAGE_KEY_SETTINGS, updatedSettings);

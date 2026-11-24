@@ -120,7 +120,8 @@ export class EventService implements IEventService {
       GITHUB_TOKEN_ACTION.getTokenStatus,
       GITHUB_TOKEN_ACTION.saveToken,
       GITHUB_TOKEN_ACTION.clearToken,
-      GITHUB_TOKEN_ACTION.testToken
+      GITHUB_TOKEN_ACTION.testToken,
+      GITHUB_TOKEN_ACTION.listViewerTeams
     );
     registerDispatchGroup(
       dispatchTable,
@@ -509,6 +510,11 @@ export class EventService implements IEventService {
       const api = this.serviceContainer.getService('gitHubApiService');
       await api.fetchTodayPrs();
       if (await api.hasToken()) {
+        try {
+          await api.enrichRequestedTeamsOnStoredLists();
+        } catch (error) {
+          this.debugService.warn('[EventService] Team slug enrich failed:', error);
+        }
         await api.syncPrDetailsFromStoredLists();
       }
     } catch (error) {
@@ -551,6 +557,10 @@ export class EventService implements IEventService {
       if (message.action === GITHUB_TOKEN_ACTION.testToken) {
         const token = (message as RuntimeRequestMessage<{ token?: string }>).payload?.token;
         sendResponse({ success: true, data: await api.testToken(token) });
+        return;
+      }
+      if (message.action === GITHUB_TOKEN_ACTION.listViewerTeams) {
+        sendResponse({ success: true, data: await api.listViewerTeams() });
         return;
       }
     } catch (error) {

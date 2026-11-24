@@ -74,6 +74,17 @@ export interface InboxSettings {
   dateRange: InboxDateRange;
   /** When false (default), hidden PRs are fully removed from the UI. */
   showHidden: boolean;
+  /**
+   * When true, Today / To Review also include PRs requested of teams you are on
+   * (`review-requested:@me` minus personal `user-review-requested:@me`).
+   * Toggled from the popup header (not Settings).
+   */
+  includeTeamReviews: boolean;
+  /**
+   * Allowlist of `org/slug` team ids for team review rows.
+   * Empty array (default) means all teams.
+   */
+  teamReviewSlugs: string[];
 }
 
 export type CheckRollupState = 'SUCCESS' | 'FAILURE' | 'PENDING' | 'ERROR' | 'EXPECTED' | null;
@@ -128,7 +139,10 @@ export interface PrDetails {
 
 export type PrDetailsMap = Record<string, PrDetails>;
 
-export type TodayReason = 'mine' | 'review' | 'mentioned';
+export type TodayReason = 'mine' | 'review' | 'team' | 'mentioned';
+
+/** How a review request reached the viewer (personal vs team membership). */
+export type ReviewRequestKind = 'direct' | 'team';
 
 /** Person shown on a PR row (assignees from AvatarStack when present; else opener heuristics). */
 export interface PullRequestAuthor {
@@ -164,6 +178,15 @@ export interface PullRequest {
   authorReviewStatus?: 'approved' | 'changes_requested' | 'pending' | 'commented' | 'draft';
   /** Present on Today-tab rows only. */
   todayReason?: TodayReason;
+  /**
+   * Set on To Review / Today review rows: personal request vs team membership.
+   * Omitted on authored/merged rows.
+   */
+  reviewRequestKind?: ReviewRequestKind;
+  /**
+   * Team review targets as `org/slug` (lowercase). Used to honor inbox.teamReviewSlugs.
+   */
+  requestedTeams?: string[];
 }
 
 export interface TodayPullRequest extends PullRequest {

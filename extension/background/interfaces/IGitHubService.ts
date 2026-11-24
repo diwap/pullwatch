@@ -11,6 +11,11 @@ export interface IGitHubService extends IService {
   fetchAssignedPRs(): Promise<PullRequest[]>;
 
   /**
+   * Fetches open PRs requested of teams the viewer is on (excludes personal requests).
+   */
+  fetchTeamAssignedPRs(): Promise<PullRequest[]>;
+
+  /**
    * Fetches pull requests that the user has already reviewed but are still open.
    */
   fetchReviewedPRs(): Promise<PullRequest[]>;

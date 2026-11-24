@@ -46,6 +46,7 @@ import type { GitHubStatusSnapshot } from '@background/interfaces/IGitHubStatusC
 import { PrFetchErrorHandler } from '@background/domain/PrFetchErrorHandler';
 import { GITHUB_ORIGIN_PATTERN, type SiteAccessProbe } from '@common/site-access-classifier';
 import { countVisibleInboxBadge, hiddenPrIdSet } from '@common/pr-visibility';
+import { tagReviewRequestKind } from '@common/review-request-kind';
 
 /**
  * Backs {@link SiteAccessProbe} with `chrome.permissions.contains` via the shared adapter. Lives
@@ -575,7 +576,10 @@ export class PRService implements IPRService {
       const settings = await this.storageService.getExtensionSettings();
       const showDrafts = settings.assigned.showDraftsInList;
 
-      const freshPendingPRsRaw = await this.gitHubService.fetchAssignedPRs();
+      const freshPendingPRsRaw = tagReviewRequestKind(
+        await this.gitHubService.fetchAssignedPRs(),
+        'direct'
+      );
       let { accountSwap } = await this.detectAccountSwap('silent assigned baseline');
 
       // WHY [ordering]: If swap is known from the first assigned fetch, clear the stale route
@@ -586,7 +590,27 @@ export class PRService implements IPRService {
         ({ accountSwap } = await this.detectAccountSwap('silent assigned baseline'));
       }
 
-      const freshAssignedPRsRaw = [...freshPendingPRsRaw, ...freshReviewedPRsRaw];
+      let freshTeamPending: PullRequest[] = [];
+      if (settings.inbox.includeTeamReviews) {
+        await delay(REQUEST_DELAY_MS);
+        freshTeamPending = tagReviewRequestKind(
+          await this.gitHubService.fetchTeamAssignedPRs(),
+          'team'
+        );
+        if (!accountSwap) {
+          ({ accountSwap } = await this.detectAccountSwap('silent assigned baseline'));
+        }
+      }
+
+      // Direct personal requests win over team hits for the same URL.
+      const pendingByUrl = new Map<string, PullRequest>();
+      for (const pr of freshTeamPending) {
+        if (pr.url) pendingByUrl.set(pr.url, pr);
+      }
+      for (const pr of freshPendingPRsRaw) {
+        if (pr.url) pendingByUrl.set(pr.url, pr);
+      }
+      const freshAssignedPRsRaw = [...pendingByUrl.values(), ...freshReviewedPRsRaw];
       if (!accountSwap) {
         const assignedTrust = await this.trustAssessor.assess(
           oldPRs,
@@ -962,7 +986,9 @@ export class PRService implements IPRService {
         settings.assigned.showDraftsInList,
         settings.inbox?.orgFilter,
         hidden,
-        settings.inbox?.dateRange
+        settings.inbox?.dateRange,
+        settings.inbox?.includeTeamReviews === true,
+        settings.inbox?.teamReviewSlugs ?? []
       );
     } catch (error) {
       this.debugService.warn(
@@ -1008,7 +1034,9 @@ export class PRService implements IPRService {
       settings.assigned.showDraftsInList,
       settings.inbox?.orgFilter,
       hidden,
-      settings.inbox?.dateRange
+      settings.inbox?.dateRange,
+      settings.inbox?.includeTeamReviews === true,
+      settings.inbox?.teamReviewSlugs ?? []
     );
     await this.badgeService.setPRCountBadge(count);
   }
